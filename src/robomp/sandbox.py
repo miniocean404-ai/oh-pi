@@ -1,15 +1,44 @@
-"""Per-issue workspace lifecycle: clone pool + git worktrees."""
+"""Per-issue workspace lifecycle: clone pool + git worktrees.
+
+The remote-facing git operations (clone, fetch, push) go through a pluggable
+`GitTransport` so a deploy can keep the PAT entirely in a separate `gh-proxy`
+container. The default `LocalGitTransport` runs git in-process with ephemeral
+PAT injection via `--config-env` (see `robomp.git_ops`); the `ProxyGitTransport`
+in `robomp.proxy_client` forwards the same set of operations over HMAC RPC.
+
+Per-issue worktree add/remove stays local — those operations only touch the
+shared on-disk pool clone, no remote authentication required.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import secrets
 import shutil
 import subprocess
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
+
+from robomp.git_ops import (
+    GitCommandError,
+    PushResult,
+    redact_credentials,
+)
+from robomp.git_ops import (
+    clone as git_clone,
+)
+from robomp.git_ops import (
+    fetch_prune as git_fetch_prune,
+)
+from robomp.git_ops import (
+    fetch_ref as git_fetch_ref,
+)
+from robomp.git_ops import (
+    push as git_push,
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +60,10 @@ class Workspace:
     def repro_dir(self) -> Path:
         return self.context_dir / "repro"
 
+    @property
+    def workspace_key(self) -> str:
+        return workspace_key(self.repo_full_name, self.issue_number)
+
 
 def _slug(text: str, *, length: int = 40) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
@@ -41,8 +74,6 @@ def _slug(text: str, *, length: int = 40) -> str:
 
 def _short_hex(seed: str | None = None) -> str:
     if seed:
-        import hashlib
-
         return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8]
     return secrets.token_hex(4)
 
@@ -55,47 +86,77 @@ def make_branch(*, issue_number: int, title: str, seed: str | None = None) -> st
     return f"farm/{_short_hex(seed or f'{issue_number}-{title}')}/{_slug(title or f'issue-{issue_number}')}"
 
 
-_CRED_URL = re.compile(r"(https?://)([^:/@\s]+):([^@/\s]+)@")
+# ---------- GitTransport (transport abstraction over clone/fetch/push) ----------
 
 
-def redact_credentials(text: str | None) -> str:
-    """Strip `user:password@` from any embedded URL in the given string."""
-    if not text:
-        return text or ""
-    return _CRED_URL.sub(r"\1***@", text)
+class GitTransport(Protocol):
+    """Pluggable remote-facing git operations.
+
+    Two implementations ship in-tree:
+    - `LocalGitTransport`: in-process git with PAT injected per invocation.
+    - `robomp.proxy_client.ProxyGitTransport`: forwards over HMAC RPC.
+    """
+
+    def clone_pool(self, *, repo: str, clone_url: str, default_branch: str, target: Path) -> None:
+        """Fresh clone into `target`. `target` must not exist (or be empty)."""
+
+    def fetch_pool(self, *, repo: str, pool_dir: Path) -> None:
+        """`git fetch --prune origin` against the shared pool clone."""
+
+    def fetch_base_ref(self, *, repo: str, pool_dir: Path, ref: str) -> None:
+        """Best-effort `git fetch origin <ref>` to ensure the base branch is local."""
+
+    def push_branch(
+        self,
+        *,
+        repo: str,
+        workspace_key: str,
+        repo_dir: Path,
+        branch: str,
+        expected_head: str,
+    ) -> PushResult:
+        """Push `branch` to origin. MUST refuse if HEAD has drifted from `expected_head`."""
 
 
-def _redacted_cmd(cmd: list[str]) -> list[str]:
-    return [redact_credentials(part) for part in cmd]
+class LocalGitTransport:
+    """Default GitTransport: run git in-process with ephemeral PAT injection.
+
+    `token` MAY be `None` for tests against a local bare repo (no auth) or in
+    deploys where the orchestrator does not hold a PAT (but then the proxy
+    transport should be used instead).
+    """
+
+    __slots__ = ("_token",)
+
+    def __init__(self, token: str | None) -> None:
+        self._token = token
+
+    def clone_pool(self, *, repo: str, clone_url: str, default_branch: str, target: Path) -> None:
+        del repo  # unused; URL identifies the remote
+        git_clone(target, clone_url=clone_url, default_branch=default_branch, token=self._token)
+
+    def fetch_pool(self, *, repo: str, pool_dir: Path) -> None:
+        del repo
+        git_fetch_prune(pool_dir, token=self._token)
+
+    def fetch_base_ref(self, *, repo: str, pool_dir: Path, ref: str) -> None:
+        del repo
+        git_fetch_ref(pool_dir, ref, token=self._token)
+
+    def push_branch(
+        self,
+        *,
+        repo: str,
+        workspace_key: str,
+        repo_dir: Path,
+        branch: str,
+        expected_head: str,
+    ) -> PushResult:
+        del repo, workspace_key
+        return git_push(repo_dir, branch=branch, expected_head=expected_head, token=self._token)
 
 
-class GitCommandError(RuntimeError):
-    """Wraps a failed git subprocess with credentials redacted from argv and stderr."""
-
-    def __init__(self, cmd: list[str], returncode: int, stdout: str, stderr: str) -> None:
-        self.returncode = returncode
-        self.stdout = redact_credentials(stdout)
-        self.stderr = redact_credentials(stderr)
-        self.cmd = _redacted_cmd(cmd)
-        msg = self.stderr.strip() or self.stdout.strip() or f"exit {returncode}"
-        super().__init__(f"git {' '.join(self.cmd[1:])} failed: {msg}")
-
-
-def _run(
-    cmd: list[str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    log.debug("git", extra={"cmd": _redacted_cmd(cmd), "cwd": str(cwd) if cwd else None})
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        env={**(env or {})} if env else None,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise GitCommandError(cmd, proc.returncode, proc.stdout, proc.stderr)
-    return proc
+# ---------- low-level helpers retained for callers expecting old shape ----------
 
 
 def _safe_run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -114,12 +175,34 @@ def _safe_run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.Complete
     return proc
 
 
-class SandboxManager:
-    """Manages a shared clone pool and per-issue worktrees."""
+def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Legacy raising helper (still used by a sandbox test). Forwards to subprocess.run."""
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise GitCommandError(cmd, proc.returncode, proc.stdout, proc.stderr)
+    return proc
 
-    def __init__(self, root: Path) -> None:
+
+# ---------- SandboxManager ----------
+
+
+class SandboxManager:
+    """Manages a shared clone pool and per-issue worktrees.
+
+    Remote-facing git operations are delegated to a `GitTransport`; the rest
+    (worktree add/remove, identity config, directory layout) is purely local.
+    """
+
+    def __init__(self, root: Path, *, transport: GitTransport | None = None) -> None:
         self.root = root
         self.pool = root / "_pool"
+        self.transport: GitTransport = transport or LocalGitTransport(token=None)
         root.mkdir(parents=True, exist_ok=True)
         self.pool.mkdir(parents=True, exist_ok=True)
 
@@ -130,27 +213,20 @@ class SandboxManager:
     def ensure_clone(self, *, repo: str, clone_url: str, default_branch: str) -> Path:
         """Idempotent shared clone for `repo`.
 
-        `clone_url` may include credentials; never logged or echoed.
+        `clone_url` MUST be a plain `https://github.com/<owner>/<repo>.git`
+        (no embedded credentials). Auth is supplied per-call by the transport.
         """
         target = self.pool_path(repo)
         if (target / ".git").exists() or (target / "HEAD").exists():
-            # Refresh origin URL so a rotated PAT or changed bot login takes effect
-            # the next time we fetch through the pool.
-            _safe_run(["git", "remote", "set-url", "origin", clone_url], cwd=target)
-            _safe_run(["git", "fetch", "--prune", "origin"], cwd=target)
+            # Idempotent refresh. Remote URL is stable; no rewrite needed.
+            self.transport.fetch_pool(repo=repo, pool_dir=target)
             return target
         target.mkdir(parents=True, exist_ok=True)
-        _run(
-            [
-                "git",
-                "clone",
-                "--filter=blob:none",
-                "--no-tags",
-                "--branch",
-                default_branch,
-                clone_url,
-                str(target),
-            ]
+        self.transport.clone_pool(
+            repo=repo,
+            clone_url=clone_url,
+            default_branch=default_branch,
+            target=target,
         )
         return target
 
@@ -167,8 +243,8 @@ class SandboxManager:
         clone_url: str,
         default_branch: str,
         existing_branch: str | None = None,
-        author_name: str = "robomp",
-        author_email: str = "robomp@users.noreply.github.com",
+        author_name: str,
+        author_email: str,
     ) -> Workspace:
         """Create or resume a per-issue worktree."""
         pool = self.ensure_clone(repo=repo, clone_url=clone_url, default_branch=default_branch)
@@ -187,8 +263,8 @@ class SandboxManager:
         )
 
         if not (repo_dir / ".git").exists():
-            # Make sure the branch's base ref exists locally.
-            _safe_run(["git", "fetch", "origin", default_branch], cwd=pool)
+            # Make sure the branch's base ref exists locally (best-effort).
+            self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=default_branch)
             # Try worktree add; if the branch already exists in the pool, reuse it.
             check = _safe_run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=pool)
             if check.returncode == 0:
@@ -206,10 +282,7 @@ class SandboxManager:
                     ],
                     cwd=pool,
                 )
-        # Re-set the credentialed origin URL + identity unconditionally so a
-        # rotated PAT, changed bot login, or pre-existing worktree all use the
-        # current credentials and author config.
-        _safe_run(["git", "remote", "set-url", "origin", clone_url], cwd=repo_dir)
+        # Identity is set on the worktree's shared config; idempotent.
         _safe_run(["git", "config", "user.email", author_email], cwd=repo_dir)
         _safe_run(["git", "config", "user.name", author_name], cwd=repo_dir)
         return Workspace(
@@ -236,8 +309,12 @@ class SandboxManager:
 
 
 __all__ = [
+    "GitCommandError",
+    "GitTransport",
+    "LocalGitTransport",
     "SandboxManager",
     "Workspace",
     "make_branch",
+    "redact_credentials",
     "workspace_key",
 ]

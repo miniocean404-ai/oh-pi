@@ -7,7 +7,7 @@ from functools import cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh"]
@@ -27,12 +27,26 @@ class Settings(BaseSettings):
     )
 
     # GitHub
-    github_token: SecretStr = Field(..., alias="GITHUB_TOKEN")
+    # `github_token` is REQUIRED on the gh-proxy side (it holds the PAT) and
+    # OPTIONAL on the orchestrator side when `gh_proxy_url` is configured —
+    # the orchestrator then talks to gh-proxy over HMAC RPC and never sees
+    # the PAT. Validated end-to-end in `_validate_proxy_or_pat` below.
+    github_token: SecretStr | None = Field(None, alias="GITHUB_TOKEN")
     github_webhook_secret: SecretStr = Field(..., alias="GITHUB_WEBHOOK_SECRET")
     bot_login: str = Field(..., alias="ROBOMP_BOT_LOGIN")
     git_author_name: str | None = Field(None, alias="ROBOMP_GIT_AUTHOR_NAME")
     git_author_email: str = Field(..., alias="ROBOMP_GIT_AUTHOR_EMAIL")
     repo_allowlist_raw: str = Field("", alias="ROBOMP_REPO_ALLOWLIST")
+
+    # gh-proxy. Set BOTH to route GitHub through the proxy; leave both empty
+    # to keep PAT-on-orchestrator behavior. Mixing the two (PAT + proxy) is
+    # rejected to prevent silent fallback to direct GitHub access.
+    gh_proxy_url: str | None = Field(None, alias="ROBOMP_GH_PROXY_URL")
+    gh_proxy_hmac_key: SecretStr | None = Field(None, alias="ROBOMP_GH_PROXY_HMAC_KEY")
+    # Bind address for `python -m robomp.proxy serve`. Internal-only by
+    # default; gh-proxy never exposes a host port.
+    gh_proxy_bind_host: str = Field("0.0.0.0", alias="ROBOMP_GH_PROXY_BIND_HOST")
+    gh_proxy_bind_port: int = Field(8081, alias="ROBOMP_GH_PROXY_BIND_PORT")
 
     # Model selection
     model: str = Field("p-anthropic/claude-sonnet-4-6", alias="ROBOMP_MODEL")
@@ -44,6 +58,14 @@ class Settings(BaseSettings):
     task_timeout_seconds: float = Field(2400.0, alias="ROBOMP_TASK_TIMEOUT_SECONDS")
     request_timeout_seconds: float = Field(120.0, alias="ROBOMP_REQUEST_TIMEOUT_SECONDS")
     omp_command: str = Field("omp", alias="ROBOMP_OMP_COMMAND")
+
+    # Graceful shutdown (Phase B). On SIGTERM the dispatcher stops claiming
+    # new work, then waits up to `drain` seconds for in-flight events to
+    # complete cleanly; any still running after that get their omp
+    # subprocess killed and the row left in `running` so it requeues on
+    # next start. Sum of both MUST stay below the compose `stop_grace_period`.
+    shutdown_drain_timeout_seconds: float = Field(25.0, alias="ROBOMP_SHUTDOWN_DRAIN_TIMEOUT_SECONDS")
+    shutdown_kill_timeout_seconds: float = Field(5.0, alias="ROBOMP_SHUTDOWN_KILL_TIMEOUT_SECONDS")
 
     # Paths
     workspace_root: Path = Field(Path("./data/workspaces"), alias="ROBOMP_WORKSPACE_ROOT")
@@ -97,6 +119,66 @@ class Settings(BaseSettings):
             if isinstance(inner, str) and not inner.strip():
                 return None
         return value
+
+    @field_validator("github_token", mode="before")
+    @classmethod
+    def _blank_token_disables(cls, value: object) -> object:
+        """Treat empty/whitespace `GITHUB_TOKEN` as 'unset' so proxy-only
+        deployments don't have to remove the env var."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        if hasattr(value, "get_secret_value"):
+            inner = value.get_secret_value()  # type: ignore[attr-defined]
+            if isinstance(inner, str) and not inner.strip():
+                return None
+        return value
+
+    @field_validator("gh_proxy_url", mode="before")
+    @classmethod
+    def _blank_proxy_url_disables(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("gh_proxy_hmac_key", mode="before")
+    @classmethod
+    def _blank_proxy_key_disables(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        if hasattr(value, "get_secret_value"):
+            inner = value.get_secret_value()  # type: ignore[attr-defined]
+            if isinstance(inner, str) and not inner.strip():
+                return None
+        return value
+
+    @model_validator(mode="after")
+    def _validate_proxy_or_pat(self) -> Settings:
+        """Enforce mutual exclusion between PAT and proxy mode.
+
+        - Both set → reject (silent fallback to direct GitHub would defeat
+          the isolation goal).
+        - Proxy URL set but no HMAC key (or vice versa) → reject (gh-proxy
+          would either be unauthenticated or unreachable).
+        - Neither set → also reject; SOMETHING needs to talk to GitHub.
+        """
+        has_token = self.github_token is not None
+        has_url = bool(self.gh_proxy_url)
+        has_key = self.gh_proxy_hmac_key is not None
+        if has_token and has_url:
+            raise ValueError(
+                "GITHUB_TOKEN and ROBOMP_GH_PROXY_URL are mutually exclusive — "
+                "set ONE to choose between direct-PAT and gh-proxy modes."
+            )
+        if has_url != has_key:
+            raise ValueError(
+                "ROBOMP_GH_PROXY_URL and ROBOMP_GH_PROXY_HMAC_KEY must both be set together (or both empty)."
+            )
+        if not has_token and not has_url:
+            raise ValueError(
+                "no GitHub access configured: set GITHUB_TOKEN, or set "
+                "ROBOMP_GH_PROXY_URL + ROBOMP_GH_PROXY_HMAC_KEY to use gh-proxy."
+            )
+        return self
 
     @field_validator("repo_allowlist_raw", mode="before")
     @classmethod
