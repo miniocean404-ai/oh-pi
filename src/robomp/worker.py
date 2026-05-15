@@ -25,6 +25,7 @@ from omp_rpc import (
     MessageUpdateEvent,
     RpcClient,
     RpcError,
+    RpcProcessExitError,
     ToolExecutionEndEvent,
 )
 
@@ -384,7 +385,25 @@ def _run_rpc_blocking(
         # out from under us, which makes `prompt_and_wait` raise an `RpcError`
         # we'll let propagate. The `with` exit calls `client.stop()` again, but
         # it's idempotent.
-        register_cancel_hook(client.stop)
+        #
+        # NOTE: omp_rpc.RpcClient.stop() has a bug where it sets `_stopping=True`
+        # before the stdout reader loop notices the closed pipe, so the reader's
+        # `if not self._stopping` guard skips `_mark_closed()` entirely.
+        # `_wait_for_agent_end` then blocks on `_event_condition` until the hard
+        # timeout because `_closed_error` is never set. We work around it here
+        # by calling `_mark_closed()` ourselves after stop returns — this is
+        # idempotent (it no-ops when `_closed_error` is already set).
+        def _cancel_hook() -> None:
+            try:
+                client.stop()
+            finally:
+                # Private API, but the only way to unblock `_wait_for_agent_end`
+                # without waiting for the request timeout. Idempotent.
+                client._mark_closed(  # noqa: SLF001
+                    RpcProcessExitError("cancelled by operator")
+                )
+
+        register_cancel_hook(_cancel_hook)
         try:
             client.install_headless_ui()
             client.on_tool_execution_end(_on_tool_end)
@@ -444,7 +463,7 @@ def _run_rpc_blocking(
                     extra={"issue": bindings.issue_key, "task": task_kind, "timeout": hard_timeout_seconds},
                 )
                 try:
-                    client.stop()
+                    _cancel_hook()
                 except Exception:
                     log.exception(
                         "rpc hard timeout stop failed", extra={"issue": bindings.issue_key, "task": task_kind}

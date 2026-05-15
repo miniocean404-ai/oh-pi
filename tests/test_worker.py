@@ -26,8 +26,8 @@ class _FakeRpcClient:
         self.set_todos_calls: list[list[dict]] = []
         self.get_todos_calls = 0
         self.stop_calls = 0
+        self.mark_closed_calls: list[BaseException] = []
         _FakeRpcClient.instances.append(self)
-
     def __enter__(self):
         return self
 
@@ -45,6 +45,9 @@ class _FakeRpcClient:
 
     def stop(self) -> None:
         self.stop_calls += 1
+
+    def _mark_closed(self, error: BaseException) -> None:
+        self.mark_closed_calls.append(error)
 
     def set_todos(self, phases):
         self.set_todos_calls.append(phases)
@@ -459,4 +462,50 @@ async def test_run_rpc_hard_timeout_stops_client_and_fails(
     finally:
         loop.close()
 
-    assert _FakeRpcClient.instances[0].stop_calls == 1
+    fake = _FakeRpcClient.instances[0]
+    assert fake.stop_calls == 1
+    # `_cancel_hook` (used by both manual cancel and hard timeout) MUST also call
+    # `_mark_closed` to unblock `_wait_for_agent_end` — `stop()` alone leaves
+    # `_closed_error` unset (omp_rpc bug), so the worker would hang otherwise.
+    assert len(fake.mark_closed_calls) == 1
+    from omp_rpc import RpcProcessExitError
+
+    assert isinstance(fake.mark_closed_calls[0], RpcProcessExitError)
+
+
+@pytest.mark.asyncio
+async def test_run_rpc_cancel_hook_stops_and_marks_closed(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cancel hook registered with `register_cancel_hook` must call both
+    `client.stop()` AND `client._mark_closed()`. The latter is the workaround for
+    an upstream omp_rpc bug where `stop()` does not set `_closed_error`, leaving
+    `_wait_for_agent_end` blocked until timeout."""
+    captured: list = []
+    monkeypatch.setattr("robomp.worker.register_cancel_hook", lambda hook: captured.append(hook))
+    monkeypatch.setattr("robomp.worker.unregister_cancel_hook", lambda: None)
+
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="triage_issue",
+            prompt="x",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    assert len(captured) == 1
+    hook = captured[0]
+    fake = _FakeRpcClient.instances[0]
+    pre_stop = fake.stop_calls
+    hook()  # Simulate the API/worker firing the cancel
+    assert fake.stop_calls == pre_stop + 1
+    assert len(fake.mark_closed_calls) == 1
+    from omp_rpc import RpcProcessExitError
+
+    assert isinstance(fake.mark_closed_calls[0], RpcProcessExitError)
+    assert "cancelled by operator" in str(fake.mark_closed_calls[0])
