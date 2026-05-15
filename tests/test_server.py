@@ -1926,3 +1926,205 @@ async def test_directive_handler_attaches_thread_from_github(
     assert ("comment", "alice") in kinds_authors
     assert ("comment", "bob") in kinds_authors
     close_database()
+
+
+# ---------- triage_issue: closing-PR skip ----------
+
+
+class _StubGithubForTriage:
+    """Minimal `GitHubBackend` shim for triage_issue tests."""
+
+    def __init__(self, closing_prs: tuple[int, ...] | Exception = ()) -> None:
+        self._closing_prs = closing_prs
+        self.calls: list[tuple[str, int]] = []
+
+    async def list_closing_pull_requests(self, repo: str, number: int) -> tuple[int, ...]:
+        self.calls.append((repo, number))
+        if isinstance(self._closing_prs, Exception):
+            raise self._closing_prs
+        return self._closing_prs
+
+
+async def test_triage_issue_skips_when_a_closing_pr_already_exists(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """An OPEN PR linked via Closes/Fixes/Resolves means another author is on it.
+    The bot MUST NOT triage, label, or build a workspace — leave it alone."""
+    from robomp import tasks
+    from robomp.github_client import IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=1069,
+        title="x",
+        body="y",
+        state="open",
+        author="alice",
+        labels=(),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    github = _StubGithubForTriage(closing_prs=(1070,))
+
+    await tasks.triage_issue(
+        settings=settings,
+        db=db,
+        github=github,  # type: ignore[arg-type]
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,  # type: ignore[arg-type]
+        payload={"action": "opened", "issue": {"number": 1069}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="t-skip-1",
+    )
+
+    assert github.calls == [("octo/widget", 1069)]
+    assert stub_run_task == [], "must not invoke run_task when a closing PR exists"
+    assert sandbox.ensure_calls == [], "must not create a workspace when skipping"
+    assert db.get_issue("octo/widget#1069") is None, "must not persist an issue row when skipping"
+    close_database()
+
+
+async def test_triage_issue_proceeds_when_no_closing_pr(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    from robomp import tasks
+    from robomp.github_client import IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=42,
+        title="x",
+        body="y",
+        state="open",
+        author="alice",
+        labels=(),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    github = _StubGithubForTriage(closing_prs=())
+
+    await tasks.triage_issue(
+        settings=settings,
+        db=db,
+        github=github,  # type: ignore[arg-type]
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,  # type: ignore[arg-type]
+        payload={"action": "opened", "issue": {"number": 42}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="t-skip-2",
+    )
+
+    assert github.calls == [("octo/widget", 42)]
+    assert len(stub_run_task) == 1
+    assert sandbox.ensure_calls, "workspace must be created when no closing PR"
+    row = db.get_issue("octo/widget#42")
+    assert row is not None and row.state == "reproducing"
+    close_database()
+
+
+async def test_triage_issue_fails_open_when_timeline_fetch_errors(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """A transient timeline fetch failure MUST NOT block legitimate triage."""
+    from robomp import tasks
+    from robomp.github_client import GitHubError, IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=99,
+        title="x",
+        body="y",
+        state="open",
+        author="alice",
+        labels=(),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    github = _StubGithubForTriage(closing_prs=GitHubError(503, "upstream timeout"))
+
+    await tasks.triage_issue(
+        settings=settings,
+        db=db,
+        github=github,  # type: ignore[arg-type]
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,  # type: ignore[arg-type]
+        payload={"action": "opened", "issue": {"number": 99}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="t-skip-3",
+    )
+
+    assert len(stub_run_task) == 1, "transient timeline error must fail open"
+    assert sandbox.ensure_calls
+    close_database()
+
+
+async def test_triage_issue_does_not_recheck_when_issue_row_exists(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """A second triage of the same issue (e.g. retry/replay) MUST NOT re-query the
+    timeline — the bot is already committed and the row guards re-entry."""
+    from robomp import tasks
+    from robomp.github_client import IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    # Pre-seed the issue row as if a prior triage created it.
+    db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="reproducing")
+
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=7,
+        title="x",
+        body="y",
+        state="open",
+        author="alice",
+        labels=(),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    github = _StubGithubForTriage(closing_prs=(1070,))  # would skip if called
+
+    await tasks.triage_issue(
+        settings=settings,
+        db=db,
+        github=github,  # type: ignore[arg-type]
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,  # type: ignore[arg-type]
+        payload={"action": "opened", "issue": {"number": 7}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="t-skip-4",
+    )
+
+    assert github.calls == [], "MUST NOT query timeline on a repeat-triage"
+    assert len(stub_run_task) == 1
+    close_database()

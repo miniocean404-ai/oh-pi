@@ -114,3 +114,59 @@ def test_204_no_content_returns_none() -> None:
     client = GitHubClient("tok", transport=transport)
     # add_assignees with empty list short-circuits without a request; pass one to force the call.
     asyncio.new_event_loop().run_until_complete(client.add_assignees("o/r", 1, ["alice"]))
+
+
+def test_list_closing_pull_requests_filters_disconnected_and_closed() -> None:
+    """Net connected−disconnected open PRs only."""
+    captured: dict[str, str] = {}
+
+    timeline = [
+        # PR #100 connected and still open → included
+        {
+            "event": "connected",
+            "source": {"issue": {"number": 100, "state": "open", "pull_request": {"url": "..."}}},
+        },
+        # PR #200 connected then disconnected → excluded
+        {
+            "event": "connected",
+            "source": {"issue": {"number": 200, "state": "open", "pull_request": {"url": "..."}}},
+        },
+        {
+            "event": "disconnected",
+            "source": {"issue": {"number": 200, "state": "open", "pull_request": {"url": "..."}}},
+        },
+        # PR #300 connected but currently closed (e.g. rejected) → excluded
+        {
+            "event": "connected",
+            "source": {"issue": {"number": 300, "state": "closed", "pull_request": {"url": "..."}}},
+        },
+        # Cross-referenced (not connected) — not a closing link → excluded
+        {
+            "event": "cross-referenced",
+            "source": {"issue": {"number": 400, "state": "open", "pull_request": {"url": "..."}}},
+        },
+        # Plain issue cross-ref (no pull_request) → excluded
+        {
+            "event": "connected",
+            "source": {"issue": {"number": 500, "state": "open"}},
+        },
+        # Unrelated timeline events → ignored
+        {"event": "labeled", "label": {"name": "bug"}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["per_page"] = request.url.params.get("per_page", "")
+        return httpx.Response(200, json=timeline)
+
+    client = GitHubClient("tok", transport=httpx.MockTransport(handler))
+    prs = _run_async(client.list_closing_pull_requests("octo/widget", 42))
+    assert prs == (100,)
+    assert captured["path"] == "/repos/octo/widget/issues/42/timeline"
+    assert captured["per_page"] == "100"
+
+
+def test_list_closing_pull_requests_empty_timeline() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[]))
+    client = GitHubClient("tok", transport=transport)
+    assert _run_async(client.list_closing_pull_requests("octo/widget", 7)) == ()

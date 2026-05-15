@@ -232,6 +232,28 @@ async def triage_issue(
         log.info("skip: triage on PR-like issue", extra={"repo": repo.full_name, "n": issue.number})
         return
     key = issue_key(repo.full_name, issue.number)
+    if db.get_issue(key) is None:
+        # First-time triage: bail if a PR (human or another bot) already
+        # claims to close this issue via Closes/Fixes/Resolves syntax or
+        # the Development panel. We never replay closing-PR detection on
+        # a follow-up because by then the bot has already committed
+        # resources (workspace, omp session) to this issue.
+        try:
+            closing_prs = await github.list_closing_pull_requests(repo.full_name, issue.number)
+        except GitHubError as exc:
+            # Fail-open: a transient timeline fetch failure shouldn't
+            # block legitimate triage. Worst case we do redundant work.
+            log.warning(
+                "closing-PR check failed; proceeding with triage",
+                extra={"key": key, "err": str(exc)},
+            )
+            closing_prs = ()
+        if closing_prs:
+            log.info(
+                "skip: issue already covered by an open PR",
+                extra={"key": key, "prs": list(closing_prs)},
+            )
+            return
     db.upsert_issue(key=key, repo=repo.full_name, number=issue.number, state="reproducing")
     clone_url = repo.clone_url
     workspace = sandbox.ensure_workspace(
