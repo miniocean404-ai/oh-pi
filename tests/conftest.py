@@ -41,6 +41,40 @@ def _ensure_dashboard_bundle() -> None:
     reset_index_cache()
 
 
+
+@pytest.fixture(autouse=True)
+def _open_tmp_path_for_slot_traversal(tmp_path: Path) -> None:
+    """Grant traverse (`+x`) on tmp_path's root-owned ancestors so slot
+    subprocesses can reach the workspace.
+
+    pytest's default ``tmp_path`` lives under ``/tmp/pytest-of-<user>/`` with
+    mode ``0700``. On macOS dev that's irrelevant (no slot subprocess ever
+    drops uid). On Linux+root the slot UID (e.g. 2001) is non-zero and
+    every directory between ``/`` and the workspace needs at least the
+    `o+x` bit or the slot's stat fails with EACCES. Adds `o+x` (NOT `o+r`)
+    so directory contents stay private; only path-traversal is allowed.
+    """
+    import os
+    import platform
+    import stat
+
+    if platform.system() != "Linux" or os.geteuid() != 0:
+        return
+    cursor = tmp_path.resolve()
+    while cursor != cursor.parent:
+        try:
+            st = cursor.stat()
+        except FileNotFoundError:
+            break
+        if not stat.S_ISDIR(st.st_mode):
+            break
+        if not (st.st_mode & 0o001):
+            try:
+                cursor.chmod(st.st_mode | 0o001)
+            except PermissionError:
+                break
+        cursor = cursor.parent
+
 def _baseline_env(tmp_path: Path) -> dict[str, str]:
     return {
         # Orchestrator-mode: no PAT in this container; talk to gh-proxy instead.

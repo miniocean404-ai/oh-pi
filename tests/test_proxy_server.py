@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import time
 from collections.abc import Callable
@@ -762,6 +763,13 @@ async def test_git_push_passes_slot_uid_to_git_push(
 
     branch = "farm/abc/slot"
     repo_dir, head = _stage_workspace(proxy_settings, upstream_repo, "octo/widget", 1, branch)
+    # The push handler reads the origin URL as the slot uid. On Linux+root
+    # the staged workspace is root-owned; hand it to slot 2001 so the
+    # subprocess can stat it. On macOS dev this is a no-op (slot identity
+    # is never activated).
+    if platform.system() == "Linux" and os.geteuid() == 0:
+        for path in [repo_dir.parent, repo_dir, *repo_dir.rglob("*")]:
+            os.chown(path, 2001, 2001, follow_symlinks=False)
     captured: dict[str, object] = {}
 
     def fake_git_push(path: Path, **kwargs: object) -> PushResult:

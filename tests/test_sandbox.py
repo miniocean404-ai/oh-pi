@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import signal
 import stat
 import subprocess
@@ -148,6 +149,13 @@ def test_rename_workspace_branch_refreshes_shared_metadata(tmp_path: Path, monke
         repo_full_name="octo/widget",
         issue_number=1,
     )
+    # On Linux+root the rename runs `git branch -m` as the slot uid (2004),
+    # so the worktree needs to be readable by that uid before the call.
+    # On macOS dev `_slot_permissions_active` returns False and this
+    # whole block is a no-op.
+    if platform.system() == "Linux" and os.geteuid() == 0:
+        for path in [root, repo_dir, *repo_dir.rglob("*")]:
+            os.chown(path, 2004, 2004, follow_symlinks=False)
     calls: list[tuple[Path, int | None]] = []
     monkeypatch.setattr(
         "robomp.sandbox._share_git_metadata_with_slots",
@@ -688,12 +696,20 @@ def test_ensure_workspace_refreshes_permissions_for_retry_slot_and_session(
 ) -> None:
     chowns: list[tuple[Path, int | None]] = []
     shared: list[tuple[Path, int | None]] = []
+    real_chown = _chown_workspace
+    real_share = _share_git_metadata_with_slots
 
-    monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda root, slot_uid: chowns.append((root, slot_uid)))
-    monkeypatch.setattr(
-        "robomp.sandbox._share_git_metadata_with_slots",
-        lambda repo_dir, slot_uid: shared.append((repo_dir, slot_uid)),
-    )
+    def record_chown(root: Path, slot_uid: int | None) -> None:
+        chowns.append((root, slot_uid))
+        # Delegate so subsequent slot-identity git ops can stat the tree.
+        real_chown(root, slot_uid)
+
+    def record_share(repo_dir: Path, slot_uid: int | None) -> None:
+        shared.append((repo_dir, slot_uid))
+        real_share(repo_dir, slot_uid)
+
+    monkeypatch.setattr("robomp.sandbox._chown_workspace", record_chown)
+    monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", record_share)
 
     mgr = SandboxManager(tmp_path / "workspaces")
     ws1 = mgr.ensure_workspace(
@@ -826,9 +842,14 @@ def test_ensure_workspace_invokes_slot_chown(
     tmp_path: Path, upstream_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[Path, int | None]] = []
+    real_chown = _chown_workspace
 
     def record_chown(ws_root: Path, slot_uid: int | None) -> None:
         calls.append((ws_root, slot_uid))
+        # Delegate to the real chown so the subsequent `git config` as the
+        # slot can stat the tree. On macOS dev (uid != 0) the real chown is
+        # itself a no-op; on Linux+root in CI it hands the tree to the slot.
+        real_chown(ws_root, slot_uid)
 
     monkeypatch.setattr("robomp.sandbox._chown_workspace", record_chown)
     mgr = SandboxManager(tmp_path / "workspaces")
@@ -852,6 +873,7 @@ def test_ensure_workspace_provisions_and_slot_owns_runtime_dirs(
 ) -> None:
     owned: dict[Path, tuple[int, int]] = {}
     runtime_paths: list[Path] = []
+    real_chown = _chown_workspace
 
     def record_chown(ws_root: Path, slot_uid: int | None) -> None:
         assert slot_uid is not None
@@ -869,6 +891,10 @@ def test_ensure_workspace_provisions_and_slot_owns_runtime_dirs(
         for path in paths:
             assert path.is_dir()
             owned[path] = (slot_uid, slot_uid)
+        # Same rationale as test_ensure_workspace_invokes_slot_chown: hand
+        # the tree to the slot so the subsequent `git config` works under
+        # real slot permissions in CI.
+        real_chown(ws_root, slot_uid)
 
     monkeypatch.setattr("robomp.sandbox._chown_workspace", record_chown)
     mgr = SandboxManager(tmp_path / "workspaces")
