@@ -1,8 +1,13 @@
+
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 
+// 旧版 pi 包名兼容层：
+// 历史上 pi-* 系列内部包曾以多个不同 scope 发布（mariozechner、earendil-works、oh-my-pi）。
+// 本文件通过 Bun 插件钩子，把所有这些别名的导入语句统一重定向到主进程内的 @oh-my-pi 实现，
+// 从而保证插件无论声明的是哪个历史 scope，都跑在与宿主一致的单一模块实例上。
 // Canonical scope for in-process pi packages. Plugins published against any of
 // the aliased scopes below (mariozechner's original publish, earendil-works'
 // fork, or the canonical @oh-my-pi scope itself) are remapped to this scope and
@@ -211,6 +216,10 @@ async function mirrorLegacyPiFile(sourcePath: string, state: LegacyPiMirrorState
 	return mirrorPath;
 }
 
+/**
+ * 加载一个历史 pi 模块文件：先把其导入路径全部改写为镜像后的版本，再动态 import。
+ * 主要供运行时无法走 Bun 插件路径的场景（例如直接读文件后再 import）。
+ */
 export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown> {
 	const root = path.join(os.tmpdir(), "omp-legacy-pi-file", Bun.hash(resolvedPath).toString(36));
 	await fs.rm(root, { recursive: true, force: true });
@@ -247,6 +256,11 @@ function resolveTypeBoxSpecifier(): { path: string } {
 	return { path: TYPEBOX_SHIM_PATH };
 }
 
+/**
+ * 安装 Bun 插件钩子：拦截对历史 pi 包名（以及 @sinclair/typebox）的解析请求，
+ * 将其重定向到本仓库内置的 @oh-my-pi 实现或 typebox shim，并对插件 source 中的
+ * 相应 import 语句做相同的字符串改写。仅会安装一次（幂等）。
+ */
 export function installLegacyPiSpecifierShim(): void {
 	if (isLegacyPiSpecifierShimInstalled) {
 		return;
@@ -290,3 +304,4 @@ export function installLegacyPiSpecifierShim(): void {
 		},
 	});
 }
+

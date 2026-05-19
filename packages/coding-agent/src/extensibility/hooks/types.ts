@@ -1,3 +1,4 @@
+
 import type { ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -46,6 +47,9 @@ export type { ExecOptions, ExecResult } from "../../exec/exec";
 /**
  * UI context for hooks to request interactive UI from the harness.
  * Each mode (interactive, RPC, print) provides its own implementation.
+ *
+ * Hook 用于向运行环境请求交互式 UI 的上下文。
+ * 各运行模式（interactive、RPC、print）各自提供实现。
  */
 // fallow-ignore-next-line code-duplication
 // Parallel to ExtensionUIContext: hooks expose a deliberately narrower UI
@@ -157,6 +161,9 @@ export interface HookUIContext {
 /**
  * Context passed to hook event handlers.
  * For command handlers, see HookCommandContext which extends this with session control methods.
+ *
+ * 传递给 hook 事件处理器的上下文。
+ * 命令处理器请参考 {@link HookCommandContext}，它在此基础上扩展了会话控制方法。
  */
 // fallow-ignore-next-line code-duplication
 // Parallel to ExtensionContext: hooks see a narrower runtime context (no
@@ -190,6 +197,11 @@ export interface HookContext {
  *
  * These methods are not available in event handlers because they can cause
  * deadlocks when called from within the agent loop (e.g., tool_call, context events).
+ *
+ * slash 命令处理器使用的扩展上下文，包含仅在用户主动触发命令时才安全的会话控制方法。
+ *
+ * 事件处理器不可使用这些方法 —— 在 agent 循环中（如 tool_call、context 事件）
+ * 调用它们会引发死锁。
  */
 // fallow-ignore-next-line code-duplication
 // Parallel to ExtensionCommandContext: hooks intentionally omit
@@ -242,6 +254,7 @@ export interface HookCommandContext extends HookContext {
 
 // ============================================================================
 // Session Events (shared with extensions subsystem)
+// 会话事件（与 extensions 子系统共享）
 // ============================================================================
 
 export type {
@@ -265,6 +278,10 @@ export type {
  * Event data for before_agent_start event.
  * Fired after user submits a prompt but before the agent loop starts.
  * Allows hooks to inject context that will be persisted and visible in TUI.
+ *
+ * `before_agent_start` 事件数据。
+ * 在用户提交 prompt 之后、agent 循环启动之前触发；
+ * Hook 可在此注入会被持久化并在 TUI 中显示的上下文消息。
  */
 export interface BeforeAgentStartEvent {
 	type: "before_agent_start";
@@ -290,6 +307,9 @@ export type {
 /**
  * Event data for tool_call event.
  * Fired before a tool is executed. Hooks can block execution.
+ *
+ * `tool_call` 事件数据。
+ * 在工具执行之前触发，hook 可阻断执行。
  */
 export interface ToolCallEvent {
 	type: "tool_call";
@@ -303,6 +323,7 @@ export interface ToolCallEvent {
 
 /**
  * Base interface for tool_result events.
+ * `tool_result` 系列事件的基础接口。
  */
 interface ToolResultEventBase {
 	type: "tool_result";
@@ -316,43 +337,50 @@ interface ToolResultEventBase {
 	isError?: boolean;
 }
 
-/** Tool result event for bash tool */
+/** Tool result event for bash tool
+ * bash 工具的 tool_result 事件 */
 export interface BashToolResultEvent extends ToolResultEventBase {
 	toolName: "bash";
 	details: BashToolDetails | undefined;
 }
 
-/** Tool result event for read tool */
+/** Tool result event for read tool
+ * read 工具的 tool_result 事件 */
 export interface ReadToolResultEvent extends ToolResultEventBase {
 	toolName: "read";
 	details: ReadToolDetails | undefined;
 }
 
-/** Tool result event for edit tool */
+/** Tool result event for edit tool
+ * edit 工具的 tool_result 事件 */
 export interface EditToolResultEvent extends ToolResultEventBase {
 	toolName: "edit";
 	details: EditToolDetails | undefined;
 }
 
-/** Tool result event for write tool */
+/** Tool result event for write tool
+ * write 工具的 tool_result 事件 */
 export interface WriteToolResultEvent extends ToolResultEventBase {
 	toolName: "write";
 	details: undefined;
 }
 
-/** Tool result event for search tool */
+/** Tool result event for search tool
+ * search 工具的 tool_result 事件 */
 export interface SearchToolResultEvent extends ToolResultEventBase {
 	toolName: "search";
 	details: SearchToolDetails | undefined;
 }
 
-/** Tool result event for find tool */
+/** Tool result event for find tool
+ * find 工具的 tool_result 事件 */
 export interface FindToolResultEvent extends ToolResultEventBase {
 	toolName: "find";
 	details: FindToolDetails | undefined;
 }
 
-/** Tool result event for custom/unknown tools */
+/** Tool result event for custom/unknown tools
+ * 自定义/未知工具的 tool_result 事件 */
 export interface CustomToolResultEvent extends ToolResultEventBase {
 	toolName: string;
 	details: unknown;
@@ -362,6 +390,10 @@ export interface CustomToolResultEvent extends ToolResultEventBase {
  * Event data for tool_result event.
  * Fired after a tool is executed. Hooks can modify the result.
  * Use toolName to discriminate and get typed details.
+ *
+ * `tool_result` 事件数据。
+ * 工具执行结束后触发，hook 可修改结果。
+ * 通过 toolName 进行判别即可获得对应的强类型 details。
  */
 export type ToolResultEvent =
 	| BashToolResultEvent
@@ -374,6 +406,7 @@ export type ToolResultEvent =
 
 /**
  * Union of all hook event types.
+ * 所有 hook 事件类型的联合。
  */
 export type HookEvent =
 	| SessionEvent
@@ -394,11 +427,14 @@ export type HookEvent =
 
 // ============================================================================
 // Event Results
+// 事件处理结果
 // ============================================================================
 
 /**
  * Return type for context event handlers.
  * Allows hooks to modify messages before they're sent to the LLM.
+ *
+ * context 事件处理器的返回类型；允许 hook 在消息发送给 LLM 之前进行修改。
  */
 export interface ContextEventResult {
 	/** Modified messages to send instead of the original */
@@ -410,6 +446,8 @@ export type { ToolCallEventResult, ToolResultEventResult } from "../shared-event
 /**
  * Return type for before_agent_start event handlers.
  * Allows hooks to inject context before the agent runs.
+ *
+ * `before_agent_start` 事件处理器的返回类型；允许 hook 在 agent 运行前注入上下文。
  */
 export interface BeforeAgentStartEventResult {
 	/** Message to inject into context (persisted to session, visible in TUI) */
@@ -426,15 +464,19 @@ export type {
 
 // ============================================================================
 // Hook API
+// Hook API
 // ============================================================================
 
 /**
  * Handler function type for each event.
  * Handlers can return R, undefined, or void (bare return statements).
+ *
+ * 通用 hook 事件处理器函数类型；可返回 R、undefined 或 void（空 return）。
  */
 // biome-ignore lint/suspicious/noConfusingVoidType: void allows bare return statements in handlers
 export type HookHandler<E, R = undefined> = (event: E, ctx: HookContext) => Promise<R | void> | R | void;
 
+/** Hook 消息渲染选项。 */
 export interface HookMessageRenderOptions {
 	/** Whether the view is expanded */
 	expanded: boolean;
@@ -443,6 +485,8 @@ export interface HookMessageRenderOptions {
 /**
  * Renderer for hook messages.
  * Hooks register these to provide custom TUI rendering for their message types.
+ *
+ * Hook 消息渲染器签名；hook 注册它以为自定义消息类型提供 TUI 渲染。
  */
 export type HookMessageRenderer<T = unknown> = (
 	message: HookMessage<T>,
@@ -452,10 +496,12 @@ export type HookMessageRenderer<T = unknown> = (
 
 /**
  * Command registration options.
+ * 命令注册配置项。
  */
 // fallow-ignore-next-line code-duplication
 // Parallel to extensions' RegisteredCommand: hooks bind to
 // HookCommandContext and have no argument-completion hook.
+/** Hook 注册的 slash 命令；处理器绑定 HookCommandContext，且无参数补全钩子。 */
 export interface RegisteredCommand {
 	name: string;
 	description?: string;
@@ -466,6 +512,9 @@ export interface RegisteredCommand {
 /**
  * HookAPI passed to hook factory functions.
  * Hooks use pi.on() to subscribe to events and pi.sendMessage() to inject messages.
+ *
+ * 传递给 hook 工厂函数的 HookAPI。
+ * Hook 通过 `pi.on()` 订阅事件，通过 `pi.sendMessage()` 注入消息。
  */
 export interface HookAPI {
 	// Session events
@@ -582,18 +631,23 @@ export interface HookAPI {
 /**
  * Hook factory function type.
  * Hooks export a default function that receives the HookAPI.
+ *
+ * Hook 工厂函数类型；hook 模块默认导出一个接收 HookAPI 的函数。
  */
 export type HookFactory = (pi: HookAPI) => void;
 
 // ============================================================================
 // Errors
+// 错误
 // ============================================================================
 
 /**
  * Error emitted when a hook fails.
+ * Hook 执行失败时抛出的错误信息结构。
  */
 export interface HookError {
 	hookPath: string;
 	event: string;
 	error: string;
 }
+

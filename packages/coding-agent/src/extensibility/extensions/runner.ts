@@ -1,5 +1,7 @@
+
 /**
  * Extension runner - executes extensions and manages their lifecycle.
+ * 扩展运行器 —— 调度扩展执行并管理其生命周期。
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
@@ -52,17 +54,21 @@ import type {
 	UserPythonEventResult,
 } from "./types";
 
-/** Combined result from all before_agent_start handlers */
+/** Combined result from all before_agent_start handlers
+ * 所有 before_agent_start 处理器结果的合并产物 */
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
 	systemPrompt?: string[];
 }
 
+/** 扩展错误监听器函数类型。 */
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
+/** 扩展事件处理器默认超时时间（毫秒）。 */
 export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
 let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
 
+/** 仅供测试使用：覆盖扩展处理器超时阈值。 */
 export function testSetExtensionHandlerTimeoutMs(timeoutMs: number): void {
 	extensionHandlerTimeoutMs = timeoutMs;
 }
@@ -74,6 +80,9 @@ const MAX_PENDING_CREDENTIAL_DISABLED = 32;
 /**
  * Events handled by the generic emit() method.
  * Events with dedicated emitXxx() methods are excluded for stronger type safety.
+ *
+ * 通过通用 `emit()` 方法处理的事件集合；
+ * 拥有独立 `emitXxx()` 方法的事件被排除以获得更强的类型安全。
  */
 type RunnerEmitEvent = Exclude<
 	ExtensionEvent,
@@ -111,25 +120,33 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 					? SessionCompactingResult | undefined
 					: undefined;
 
+/** `ctx.newSession()` 的处理器签名。 */
 export type NewSessionHandler = (options?: {
 	parentSession?: string;
 	setup?: (sessionManager: SessionManager) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 
+/** `ctx.branch()` 的处理器签名。 */
 export type BranchHandler = (entryId: string) => Promise<{ cancelled: boolean }>;
 
+/** `ctx.navigateTree()` 的处理器签名。 */
 export type NavigateTreeHandler = (
 	targetId: string,
 	options?: { summarize?: boolean },
 ) => Promise<{ cancelled: boolean }>;
 
+/** `ctx.switchSession()` 的处理器签名。 */
 export type SwitchSessionHandler = (sessionPath: string) => Promise<{ cancelled: boolean }>;
 
+/** 优雅关停处理器签名。 */
 export type ShutdownHandler = () => void;
 
 /**
  * Helper function to emit session_shutdown event to extensions.
  * Returns true if the event was emitted, false if there were no handlers.
+ *
+ * 向扩展广播 `session_shutdown` 事件的辅助函数。
+ * 当事件被实际派发时返回 true，否则返回 false。
  */
 export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner | undefined): Promise<boolean> {
 	if (extensionRunner?.hasHandlers("session_shutdown")) {
@@ -169,6 +186,10 @@ const noOpUIContext: ExtensionUIContext = {
 	setToolsExpanded: () => {},
 };
 
+/**
+ * 扩展运行器：保存所有已加载扩展，统一派发事件、聚合命令/快捷键/工具，
+ * 并向扩展提供上下文（含 UI、模型、会话控制等）。
+ */
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
@@ -194,6 +215,12 @@ export class ExtensionRunner {
 	 * up the runtime context, so extension handlers see a populated UI/runtime context
 	 * rather than the constructor's no-op default. Bounded at
 	 * {@link MAX_PENDING_CREDENTIAL_DISABLED}; oldest entries are dropped under pressure.
+	 *
+	 * 在 {@link initialize} 执行前，通过 {@link emitCredentialDisabled} 接收的
+	 * `credential_disabled` 事件会被暂存于此缓冲区。初始化建立运行时上下文后
+	 * 由 {@link emit} 排空，确保扩展处理器看到完整的 UI/runtime 上下文而非
+	 * 构造期的 no-op 默认值。容量上限为 {@link MAX_PENDING_CREDENTIAL_DISABLED}，
+	 * 溢出时丢弃最旧条目。
 	 */
 	#pendingCredentialDisabled: CredentialDisabledEvent[] = [];
 
@@ -214,6 +241,7 @@ export class ExtensionRunner {
 		uiContext?: ExtensionUIContext,
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
+		// 将动作实现拷贝到共享 runtime，所有扩展 API 都通过它转发
 		this.runtime.sendMessage = actions.sendMessage;
 		this.runtime.sendUserMessage = actions.sendUserMessage;
 		this.runtime.appendEntry = actions.appendEntry;
@@ -228,6 +256,7 @@ export class ExtensionRunner {
 		this.runtime.setSessionName = actions.setSessionName;
 
 		// Context actions (required)
+		// 上下文动作（必填）
 		this.#getModel = contextActions.getModel;
 		this.#isIdleFn = contextActions.isIdle;
 		this.#abortFn = contextActions.abort;
@@ -236,6 +265,7 @@ export class ExtensionRunner {
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
 
 		// Command context actions (optional, only for interactive mode)
+		// 命令上下文动作（可选，仅交互模式提供）
 		if (commandContextActions) {
 			this.#waitForIdleFn = commandContextActions.waitForIdle;
 			this.#newSessionHandler = commandContextActions.newSession;
@@ -254,6 +284,10 @@ export class ExtensionRunner {
 		// spread adds the `type` discriminator — `event` is the pi-ai shape (no `type`).
 		// Deferred by one microtask so callers that register an onError listener
 		// synchronously after initialize() see handler errors routed through it.
+		// 排空 initialize 前由 emitCredentialDisabled() 缓存的事件。
+		// 展开运算补上 `type` 判别字段（pi-ai 原始事件无该字段）。
+		// 用 microtask 延后一次，确保在 initialize() 之后同步注册的 onError
+		// 监听器能接收到处理器错误。
 		const pending = this.#pendingCredentialDisabled.splice(0);
 		queueMicrotask(() => {
 			for (const event of pending) {
@@ -280,6 +314,16 @@ export class ExtensionRunner {
 	 *
 	 * Always returns; never throws. Errors from handlers are routed through
 	 * {@link onError} via {@link emit}'s normal isolation.
+	 *
+	 * 将 `AuthStorage` 抛出的 `credential_disabled` 事件转发给扩展处理器。
+	 *
+	 * 若 {@link initialize} 尚未执行，事件会被缓冲，待 initialize 接上 runtime/UI
+	 * 上下文后再回放。原因：各模式控制器在 `createAgentSession` 返回后才调用
+	 * `initialize()`，但 `AuthStorage` 可能在 `createAgentSession()` 内部的启动
+	 * 模型探测中就触发该事件；不延后处理会让扩展看到 `hasUI=false`、模型未设置、
+	 * runtime 动作均为 no-op，恰好遗漏该事件最关键的 "启动期 OAuth invalid_grant" 场景。
+	 *
+	 * 始终返回、不抛错；处理器错误通过 {@link emit} 的隔离机制转给 {@link onError}。
 	 */
 	async emitCredentialDisabled(event: CredentialDisabledEvent): Promise<void> {
 		if (!this.#initialized) {
@@ -304,7 +348,8 @@ export class ExtensionRunner {
 		return this.extensions.map(e => e.path);
 	}
 
-	/** Get all registered tools from all extensions. */
+	/** Get all registered tools from all extensions.
+	 * 获取所有扩展注册的工具集合。 */
 	getAllRegisteredTools(): RegisteredTool[] {
 		const tools: RegisteredTool[] = [];
 		for (const ext of this.extensions) {
@@ -468,6 +513,7 @@ export class ExtensionRunner {
 
 	/**
 	 * Request a graceful shutdown. Called by extension tools and event handlers.
+	 * 请求优雅关停；扩展工具与事件处理器可调用该方法。
 	 */
 	shutdown(): void {
 		this.#shutdownHandler();
@@ -725,7 +771,8 @@ export class ExtensionRunner {
 		return { skillPaths, promptPaths, themePaths };
 	}
 
-	/** Emit input event. Transforms chain, "handled" short-circuits. */
+	/** Emit input event. Transforms chain, "handled" short-circuits.
+	 * 派发 input 事件；多个处理器按链式累积转换，遇到 `handled` 即短路。 */
 	async emitInput(
 		text: string,
 		images: ImageContent[] | undefined,
@@ -755,6 +802,7 @@ export class ExtensionRunner {
 		const ctx = this.createContext();
 
 		// Check if any extensions actually have context handlers before cloning
+		// 在执行深拷贝前先检查是否真的有扩展订阅了 context 事件
 		let hasContextHandlers = false;
 		for (const ext of this.extensions) {
 			if (ext.handlers.get("context")?.length) {
@@ -771,6 +819,8 @@ export class ExtensionRunner {
 			// Messages may contain non-cloneable objects (e.g. in ToolResultMessage.details
 			// or ProviderPayload). Fall back to a shallow array clone — extensions should
 			// return new message arrays rather than mutating in place.
+			// 消息中可能存在无法 structuredClone 的对象（如 ToolResultMessage.details
+			// 或 ProviderPayload），退化为浅拷贝；扩展应返回新数组而非原地修改。
 			currentMessages = [...messages];
 		}
 
@@ -898,3 +948,4 @@ export class ExtensionRunner {
 		return undefined;
 	}
 }
+

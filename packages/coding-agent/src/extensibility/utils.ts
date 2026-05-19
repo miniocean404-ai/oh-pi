@@ -1,3 +1,4 @@
+
 import * as path from "node:path";
 import { theme } from "../modes/theme/theme";
 import { expandPath, normalizeLocalScheme } from "../tools/path-utils";
@@ -8,6 +9,11 @@ import type { HookUIContext } from "./hooks/types";
  * - Absolute paths used as-is
  * - Paths starting with ~ expanded to home directory
  * - Relative paths resolved from cwd
+ *
+ * 解析文件路径：
+ * - 绝对路径原样使用
+ * - 以 ~ 开头的路径展开为 home 目录
+ * - 相对路径以 cwd 为基础解析
  */
 export function resolvePath(filePath: string, cwd: string): string {
 	const expanded = expandPath(filePath);
@@ -25,6 +31,8 @@ export function resolvePath(filePath: string, cwd: string): string {
 
 /**
  * Create a no-op UI context for headless modes.
+ *
+ * 为 headless（无 UI）模式创建一个空操作的 UI 上下文。
  */
 export function createNoOpUIContext(): HookUIContext {
 	return {
@@ -42,3 +50,4 @@ export function createNoOpUIContext(): HookUIContext {
 		},
 	};
 }
+

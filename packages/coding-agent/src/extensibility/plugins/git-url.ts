@@ -1,5 +1,8 @@
+
 /**
  * Parsed git URL information.
+ *
+ * 解析后的 git URL 信息（含 host、路径、ref 等）。
  */
 export type GitSource = {
 	/** Always "git" for git sources */
@@ -17,6 +20,7 @@ export type GitSource = {
 };
 
 /** Known git hosts and their URL extraction logic. */
+/** 已知 git 托管服务及其 URL 解析逻辑（host -> 提取器） */
 const KNOWN_HOSTS: Record<string, (pathname: string, hash: string) => { user: string; project: string } | null> = {
 	"github.com": extractStandard,
 	"gitlab.com": extractGitLab,
@@ -25,6 +29,7 @@ const KNOWN_HOSTS: Record<string, (pathname: string, hash: string) => { user: st
 	"codeberg.org": extractStandard,
 };
 
+/** 移除 URL 中的 user:password 凭据，便于安全展示与存储 */
 function stripUrlCredentials(url: string): string {
 	if (!url.includes("://")) return url;
 	try {
@@ -39,12 +44,14 @@ function stripUrlCredentials(url: string): string {
 	}
 }
 
+/** 通用 host 的提取逻辑：/user/project(.git) */
 function extractStandard(pathname: string, _hash: string): { user: string; project: string } | null {
 	const [, user, project] = pathname.split("/", 3);
 	if (!user || !project) return null;
 	return { user, project: project.replace(/\.git$/, "") };
 }
 
+/** GitLab 提取逻辑：支持嵌套子组路径，且排除 archive 等特殊段 */
 function extractGitLab(pathname: string, _hash: string): { user: string; project: string } | null {
 	const path = pathname.startsWith("/") ? pathname.slice(1) : pathname;
 	if (path.includes("/-/") || path.includes("/archive.tar.gz")) return null;
@@ -60,6 +67,8 @@ function extractGitLab(pathname: string, _hash: string): { user: string; project
 /**
  * Try to parse a URL against known git hosts.
  * Returns `{ domain, user, project, committish }` or null.
+ *
+ * 尝试用已知 host 列表解析 URL，成功返回 { domain, user, project, committish }。
  */
 function tryKnownHost(candidate: string): { domain: string; user: string; project: string; committish: string } | null {
 	let parsed: URL;
@@ -93,6 +102,7 @@ function tryKnownHost(candidate: string): { domain: string; user: string; projec
 	};
 }
 
+/** 将形如 "repo@ref" 的 URL 拆分为仓库 URL 与 ref 两部分 */
 function splitRef(url: string): { repo: string; ref?: string } {
 	const scpLikeMatch = url.match(/^git@([^:]+):(.+)$/);
 	if (scpLikeMatch) {
@@ -144,6 +154,7 @@ function splitRef(url: string): { repo: string; ref?: string } {
 }
 
 /** Try known-host parsing and build a GitSource from the result. */
+/** 尝试用已知 host 解析并构造 GitSource */
 function tryKnownHostSource(
 	split: { repo: string; ref?: string },
 	candidate: string,
@@ -162,6 +173,7 @@ function tryKnownHostSource(
 	};
 }
 
+/** 未匹配到已知 host 时的通用 git URL 解析回退 */
 function parseGenericGitUrl(url: string): GitSource | null {
 	const { repo: repoWithoutRef, ref } = splitRef(url);
 	let repo = repoWithoutRef;
@@ -224,6 +236,12 @@ function parseGenericGitUrl(url: string): GitSource | null {
  *
  * Recognizes GitHub, GitLab, Bitbucket, Sourcehut, and Codeberg natively.
  * Falls back to generic URL parsing for other hosts.
+ *
+ * 解析 git 源字符串为 GitSource。规则：
+ * - 带 `git:` 前缀时可使用简写形式
+ * - 不带前缀时仅接受带显式协议（https/http/ssh/git）的 URL
+ * - 支持 `@ref` 后缀固定到具体 commit/分支/tag
+ * 已知 host（GitHub/GitLab/Bitbucket/Sourcehut/Codeberg）走专用提取器，其余 host 走通用回退解析。
  */
 export function parseGitUrl(source: string): GitSource | null {
 	const trimmed = source.trim();
@@ -248,9 +266,11 @@ export function parseGitUrl(source: string): GitSource | null {
 	const split = splitRef(url);
 
 	// SCP-like SSH URLs (git@host:user/repo) — convert to https for host matching
+	// SCP 风格 SSH URL（git@host:user/repo）：转换为 https 以便复用 host 匹配逻辑
 	const scpMatch = split.repo.match(/^git@([^:]+):(.+)$/);
 
 	// Try known hosts with the repo URL directly
+	// 先用直接的 URL 候选尝试已知 host
 	const directCandidates: string[] = [];
 	if (scpMatch) {
 		directCandidates.push(`https://${scpMatch[1]}/${scpMatch[2]}`);
@@ -271,6 +291,7 @@ export function parseGitUrl(source: string): GitSource | null {
 	}
 
 	// Try with https:// prefix for bare host/user/repo shorthand
+	// 对 host/user/repo 形式的裸简写，再补 https:// 前缀重试
 	if (!split.repo.includes("://") && !split.repo.startsWith("git@")) {
 		const httpsCandidate = split.ref ? `https://${split.repo}#${split.ref}` : `https://${url}`;
 		const result = tryKnownHostSource(split, httpsCandidate, `https://${split.repo}`);
@@ -279,3 +300,4 @@ export function parseGitUrl(source: string): GitSource | null {
 
 	return parseGenericGitUrl(url);
 }
+

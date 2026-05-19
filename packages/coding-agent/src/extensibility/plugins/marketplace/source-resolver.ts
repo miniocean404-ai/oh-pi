@@ -1,3 +1,4 @@
+
 /**
  * Source resolver for marketplace plugin entries.
  *
@@ -7,6 +8,8 @@
  *   - { source: "github", repo: "owner/repo" } → git clone from GitHub
  *   - { source: "git-subdir", url: "...", path: "sub/dir" } → git clone + subdir
  *   - { source: "npm", ... } → not yet supported
+ *
+ * 市场插件 source 解析器：将各类来源解析为本地绝对目录路径。
  */
 
 import * as crypto from "node:crypto";
@@ -18,12 +21,16 @@ import * as git from "../../../utils/git";
 
 import type { MarketplaceCatalogMetadata, MarketplacePluginEntry, PluginSource } from "./types";
 
+/** source 解析所需的上下文 */
 export interface ResolveContext {
 	/** Absolute path to the cloned/local marketplace directory. Required for relative sources. */
+	/** 市场克隆/本地目录的绝对路径；相对路径 source 必填 */
 	marketplaceClonePath?: string;
 	/** Catalog metadata — used for `pluginRoot` prepend. */
+	/** 市场目录元数据；用于 pluginRoot 前缀拼接 */
 	catalogMetadata?: MarketplaceCatalogMetadata;
 	/** Scratch directory for sources that require cloning or extraction. */
+	/** 临时目录：用于克隆/解压等中间步骤 */
 	tmpDir: string;
 }
 
@@ -31,6 +38,8 @@ export interface ResolveContext {
  * Resolve a plugin source to an absolute local directory path.
  *
  * The resolved path is verified to exist on disk.
+ *
+ * 将插件 source 解析为本地绝对目录路径，并校验其确实存在。
  */
 export async function resolvePluginSource(
 	entry: MarketplacePluginEntry,
@@ -46,7 +55,9 @@ export async function resolvePluginSource(
 }
 
 // ── Relative string source ("./plugins/foo") ────────────────────────
+// 相对路径字符串形式的 source 解析
 
+/** 解析 "./..." 形式的相对路径 source */
 async function resolveRelativeSource(
 	source: string,
 	context: ResolveContext,
@@ -60,10 +71,12 @@ async function resolveRelativeSource(
 	}
 
 	// If pluginRoot is set, prepend it to the path segment after "./"
+	// 若设置了 pluginRoot，则在 "./" 之后追加该前缀
 	const pluginRoot = context.catalogMetadata?.pluginRoot;
 	const relativePath = pluginRoot ? `./${path.join(pluginRoot, source.slice(2))}` : source;
 
 	// Resolve against marketplace root (not the .claude-plugin/ catalog subdirectory)
+	// 相对于市场根目录（而非 .claude-plugin/ 子目录）解析
 	const resolved = path.resolve(context.marketplaceClonePath, relativePath);
 
 	if (!pathIsWithin(context.marketplaceClonePath, resolved)) {
@@ -77,7 +90,9 @@ async function resolveRelativeSource(
 }
 
 // ── Object source variants ──────────────────────────────────────────
+// 对象形式（github / url / git-subdir / npm）的 source 解析
 
+/** 解析对象形式的 source；按 variant 分派 */
 async function resolveObjectSource(
 	source: Exclude<PluginSource, string>,
 	context: ResolveContext,
@@ -86,6 +101,7 @@ async function resolveObjectSource(
 		case "url": {
 			// { source: "url", url: "https://github.com/owner/repo.git" }
 			// Despite the name, this is typically a git clone URL
+			// 虽名为 url，但实际通常是 git clone URL
 			const targetDir = path.join(context.tmpDir, `plugin-${crypto.randomUUID()}`);
 			await git.clone(source.url, targetDir, { ref: source.ref, sha: source.sha });
 			return { dir: targetDir, tempCloneRoot: targetDir };
@@ -131,7 +147,9 @@ async function resolveObjectSource(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+// 通用辅助
 
+/** 校验 dirPath 是一个已存在的目录，否则抛出指定错误 */
 async function verifyDirExists(dirPath: string, errorMessage: string): Promise<void> {
 	try {
 		const stat = await fs.stat(dirPath);
@@ -145,3 +163,4 @@ async function verifyDirExists(dirPath: string, errorMessage: string): Promise<v
 		throw err;
 	}
 }
+

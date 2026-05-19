@@ -1,3 +1,4 @@
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -24,21 +25,27 @@ import type {
 
 // =============================================================================
 // Validation
+// 包名校验
 // =============================================================================
 
 /** Valid npm package name pattern (scoped and unscoped, with optional version) */
+/** 合法 npm 包名正则（支持 scope/普通 + 可选版本号） */
 const VALID_PACKAGE_NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*(@[a-z0-9-._^~>=<]+)?$/i;
 
 /**
  * Validate package name to prevent command injection.
+ *
+ * 校验包名以防止命令注入。
  */
 function validatePackageName(name: string): void {
 	// Remove version specifier for validation
+	// 校验前先去掉版本号
 	const baseName = extractPackageName(name);
 	if (!VALID_PACKAGE_NAME.test(baseName)) {
 		throw new Error(`Invalid package name: ${name}`);
 	}
 	// Extra safety: no shell metacharacters
+	// 额外保险：禁止 shell 元字符出现在包名中
 	if (/[;&|`$(){}[\]<>\\]/.test(name)) {
 		throw new Error(`Invalid characters in package name: ${name}`);
 	}
@@ -46,8 +53,10 @@ function validatePackageName(name: string): void {
 
 // =============================================================================
 // Plugin Manager
+// 插件管理器：负责安装/卸载/启用/特性切换/设置/健康检查
 // =============================================================================
 
+/** 插件管理器：封装插件 lifecycle、运行时配置读写、项目覆盖等行为 */
 export class PluginManager {
 	#runtimeConfig: PluginRuntimeConfig | null = null;
 	#cwd: string;
@@ -58,6 +67,7 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Runtime Config Management
+	// 运行时配置管理（lock 文件读写、项目覆盖加载）
 	// ==========================================================================
 
 	async #loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
@@ -96,6 +106,7 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Directory Management
+	// 目录管理（确保 plugins 目录与 package.json 存在）
 	// ==========================================================================
 
 	async #ensurePluginsDir(): Promise<void> {
@@ -129,10 +140,13 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Install / Uninstall
+	// 安装 / 卸载 / 列出 / 链接
 	// ==========================================================================
 
 	/**
 	 * Install a plugin from npm with optional feature selection.
+	 *
+	 * 从 npm 安装插件，并可指定要启用的可选特性。
 	 *
 	 * @param specString - Package specifier with optional features: "pkg", "pkg[feat]", "pkg[*]", "pkg[]"
 	 * @param options - Install options
@@ -156,6 +170,7 @@ export class PluginManager {
 		}
 
 		// Run npm install
+		// 通过 bun install 执行真正的安装
 		const proc = Bun.spawn(["bun", "install", spec.packageName], {
 			cwd: getPluginsDir(),
 			stdin: "ignore",
@@ -171,6 +186,7 @@ export class PluginManager {
 		}
 
 		// Resolve actual package name (strip version specifier)
+		// 解析出真实包名（去掉版本号），用于定位安装后路径
 		const actualName = extractPackageName(spec.packageName);
 		const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 
@@ -187,13 +203,16 @@ export class PluginManager {
 		manifest.version = pkg.version;
 
 		// Resolve enabled features
+		// 解析要启用的特性集合
 		let enabledFeatures: string[] | null = null;
 		if (spec.features === "*") {
 			// All features
+			// "*" 表示启用清单中声明的所有特性
 			enabledFeatures = manifest.features ? Object.keys(manifest.features) : null;
 		} else if (Array.isArray(spec.features)) {
 			if (spec.features.length > 0) {
 				// Validate requested features exist
+				// 校验请求的特性必须在清单中声明
 				if (manifest.features) {
 					for (const feat of spec.features) {
 						if (!(feat in manifest.features)) {
@@ -206,12 +225,15 @@ export class PluginManager {
 				enabledFeatures = spec.features;
 			} else {
 				// Empty array = no optional features
+				// 空数组表示不启用任何可选特性
 				enabledFeatures = [];
 			}
 		}
 		// null = use defaults
+		// null 表示使用默认特性
 
 		// Update runtime config
+		// 更新运行时配置并持久化
 		const config = await this.#ensureConfigLoaded();
 		config.plugins[pkg.name] = {
 			version: pkg.version,
@@ -232,6 +254,8 @@ export class PluginManager {
 
 	/**
 	 * Uninstall a plugin.
+	 *
+	 * 卸载插件，并从运行时配置中清理相关条目。
 	 */
 	async uninstall(name: string): Promise<void> {
 		validatePackageName(name);
@@ -251,6 +275,7 @@ export class PluginManager {
 		}
 
 		// Remove from runtime config
+		// 同时清理运行时配置中的插件状态及设置
 		const config = await this.#ensureConfigLoaded();
 		delete config.plugins[name];
 		delete config.settings[name];
@@ -259,6 +284,8 @@ export class PluginManager {
 
 	/**
 	 * List all installed plugins.
+	 *
+	 * 列出所有已安装插件（合并项目级覆盖后的视图）。
 	 */
 	async list(): Promise<InstalledPlugin[]> {
 		const pkgJsonPath = getPluginsPackageJson();
@@ -294,6 +321,7 @@ export class PluginManager {
 			};
 
 			// Apply project overrides
+			// 应用项目级覆盖（禁用列表 + 特性覆盖）
 			const isDisabledInProject = projectOverrides.disabled?.includes(name) ?? false;
 			const projectFeatures = projectOverrides.features?.[name];
 
@@ -312,6 +340,8 @@ export class PluginManager {
 
 	/**
 	 * Link a local plugin for development.
+	 *
+	 * 将本地插件目录通过 symlink 接入到 plugins/node_modules，便于开发调试。
 	 */
 	async link(localPath: string): Promise<InstalledPlugin> {
 		const absolutePath = path.resolve(this.#cwd, localPath);
@@ -333,12 +363,14 @@ export class PluginManager {
 		const linkPath = path.join(getPluginsNodeModules(), pkg.name);
 
 		// Handle scoped packages
+		// scope 包需要先确保 scope 目录存在
 		if (pkg.name.startsWith("@")) {
 			const scopeDir = path.join(getPluginsNodeModules(), pkg.name.split("/")[0]);
 			await fs.promises.mkdir(scopeDir, { recursive: true });
 		}
 
 		// Remove existing
+		// 移除已有 symlink 或目录，避免冲突
 		try {
 			const stats = await fs.promises.lstat(linkPath);
 			if (stats.isSymbolicLink() || stats.isDirectory()) {
@@ -354,6 +386,7 @@ export class PluginManager {
 		manifest.version = pkg.version;
 
 		// Add to runtime config
+		// 写入运行时配置，默认启用且使用默认特性
 		const config = await this.#ensureConfigLoaded();
 		config.plugins[pkg.name] = {
 			version: pkg.version,
@@ -374,10 +407,13 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Enable / Disable
+	// 启用 / 禁用
 	// ==========================================================================
 
 	/**
 	 * Enable or disable a plugin globally.
+	 *
+	 * 全局启用或禁用某个插件。
 	 */
 	async setEnabled(name: string, enabled: boolean): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
@@ -390,10 +426,13 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Features
+	// 特性（feature）管理
 	// ==========================================================================
 
 	/**
 	 * Get enabled features for a plugin.
+	 *
+	 * 读取某个插件当前启用的特性列表。
 	 */
 	async getEnabledFeatures(name: string): Promise<string[] | null> {
 		const config = await this.#ensureConfigLoaded();
@@ -402,6 +441,8 @@ export class PluginManager {
 
 	/**
 	 * Set enabled features for a plugin.
+	 *
+	 * 设置某个插件启用的特性集合；若指定了具体特性会先验证它们存在于清单中。
 	 */
 	async setEnabledFeatures(name: string, features: string[] | null): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
@@ -410,6 +451,7 @@ export class PluginManager {
 		}
 
 		// Validate features if setting specific ones
+		// 设置具体特性时，先校验它们是否在清单中声明
 		if (features && features.length > 0) {
 			const plugins = await this.list();
 			const plugin = plugins.find(p => p.name === name);
@@ -430,10 +472,13 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Settings
+	// 插件设置（settings）读写
 	// ==========================================================================
 
 	/**
 	 * Get all settings for a plugin.
+	 *
+	 * 获取插件全部设置，合并全局值与项目级覆盖（项目级优先）。
 	 */
 	async getPluginSettings(name: string): Promise<Record<string, unknown>> {
 		const config = await this.#ensureConfigLoaded();
@@ -442,11 +487,14 @@ export class PluginManager {
 		const project = projectOverrides.settings?.[name] || {};
 
 		// Project settings override global
+		// 项目级设置覆盖全局设置
 		return { ...global, ...project };
 	}
 
 	/**
 	 * Set a plugin setting value.
+	 *
+	 * 写入某个插件设置项（全局级）。
 	 */
 	async setPluginSetting(name: string, key: string, value: unknown): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
@@ -459,6 +507,8 @@ export class PluginManager {
 
 	/**
 	 * Delete a plugin setting.
+	 *
+	 * 删除某个插件设置项。
 	 */
 	async deletePluginSetting(name: string, key: string): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
@@ -470,15 +520,19 @@ export class PluginManager {
 
 	// ==========================================================================
 	// Doctor
+	// 健康检查（doctor）
 	// ==========================================================================
 
 	/**
 	 * Run health checks on the plugin system.
+	 *
+	 * 对插件系统执行健康检查；可选 --fix 模式会尝试自动修复部分问题。
 	 */
 	async doctor(options: DoctorOptions = {}): Promise<DoctorCheck[]> {
 		const checks: DoctorCheck[] = [];
 
 		// Check 1: Plugins directory exists
+		// 检查 1：插件根目录是否存在
 		const pluginsDir = getPluginsDir();
 		const pluginsDirExists = fs.existsSync(pluginsDir);
 		checks.push({
@@ -488,6 +542,7 @@ export class PluginManager {
 		});
 
 		// Check 2: package.json exists
+		// 检查 2：plugins 目录下的 package.json 是否存在
 		const pkgJsonPath = getPluginsPackageJson();
 		let pkg: { dependencies?: Record<string, string> };
 		let hasPkgJson = true;
@@ -508,6 +563,7 @@ export class PluginManager {
 		});
 
 		// Check 3: node_modules exists
+		// 检查 3：node_modules 是否存在
 		const nodeModulesPath = getPluginsNodeModules();
 		const hasNodeModules = fs.existsSync(nodeModulesPath);
 		checks.push({
@@ -562,6 +618,7 @@ export class PluginManager {
 			});
 
 			// Check tools path exists if specified
+			// 若清单声明了 tools 入口，校验其文件存在
 			if (manifest?.tools) {
 				const toolsPath = path.join(pluginPath, manifest.tools);
 				if (!fs.existsSync(toolsPath)) {
@@ -574,6 +631,7 @@ export class PluginManager {
 			}
 
 			// Check hooks path exists if specified
+			// 若清单声明了 hooks 入口，校验其文件存在
 			if (manifest?.hooks) {
 				const hooksPath = path.join(pluginPath, manifest.hooks);
 				if (!fs.existsSync(hooksPath)) {
@@ -586,6 +644,7 @@ export class PluginManager {
 			}
 
 			// Check extension entry paths exist if specified
+			// 若清单声明了 extensions 入口，逐个校验存在性
 			if (manifest?.extensions) {
 				for (const extensionPath of manifest.extensions) {
 					const resolvedExtensionPath = path.join(pluginPath, extensionPath);
@@ -600,6 +659,7 @@ export class PluginManager {
 			}
 
 			// Check enabled features exist in manifest
+			// 校验启用的特性是否仍存在于清单中，--fix 时会自动剔除已失效项
 			const runtimeState = config.plugins[name];
 			if (runtimeState?.enabledFeatures && manifest?.features) {
 				for (const feat of runtimeState.enabledFeatures) {
@@ -617,6 +677,7 @@ export class PluginManager {
 		}
 
 		// Check for orphaned runtime config entries
+		// 检查运行时配置中是否存在未实际安装的孤立条目
 		for (const name of Object.keys(config.plugins)) {
 			if (!(name in deps)) {
 				const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
@@ -669,8 +730,10 @@ export class PluginManager {
 
 // =============================================================================
 // Setting Validation
+// 设置值校验
 // =============================================================================
 
+/** 设置值校验结果 */
 export interface ValidationResult {
 	valid: boolean;
 	error?: string;
@@ -678,6 +741,8 @@ export interface ValidationResult {
 
 /**
  * Validate a setting value against its schema.
+ *
+ * 按 schema 校验设置值是否合法。
  */
 export function validateSetting(value: unknown, schema: PluginSettingSchema): ValidationResult {
 	switch (schema.type) {
@@ -717,6 +782,8 @@ export function validateSetting(value: unknown, schema: PluginSettingSchema): Va
 
 /**
  * Parse a string value according to a setting schema's type.
+ *
+ * 根据 schema 的类型将字符串解析为对应类型的值（用于 CLI 输入）。
  */
 export function parseSettingValue(valueStr: string, schema: PluginSettingSchema): unknown {
 	switch (schema.type) {
@@ -729,3 +796,4 @@ export function parseSettingValue(valueStr: string, schema: PluginSettingSchema)
 			return valueStr;
 	}
 }
+

@@ -1,3 +1,4 @@
+
 /**
  * Event payload and result shapes shared between the extensions and hooks
  * subsystems.
@@ -11,6 +12,12 @@
  * context, command context, tool-call discrimination, or return shapes that
  * carry subsystem-specific message types — lives in the per-subsystem
  * `types.ts` files and is documented there.
+ *
+ * extensions 与 hooks 两个子系统共享的事件载荷与返回值定义。
+ * 两者监听同样的 agent / session 生命周期，因此事件载荷（发生了什么）
+ * 与不依赖子系统特定类型的返回值结构是完全一致的。
+ * 凡是两个子系统存在差异的部分（UI 上下文、运行时上下文、命令上下文、
+ * 工具调用区分、带子系统特定消息类型的返回值），都放在各自的 types.ts 中。
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
@@ -21,15 +28,21 @@ import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../sessi
 import type { TodoItem } from "../tools/todo-write";
 
 // ============================================================================
-// Session Events
+// Session Events 会话事件
 // ============================================================================
 
-/** Fired on initial session load */
+/**
+ * Fired on initial session load
+ * 会话首次加载时触发
+ */
 export interface SessionStartEvent {
 	type: "session_start";
 }
 
-/** Fired before switching to another session (can be cancelled) */
+/**
+ * Fired before switching to another session (can be cancelled)
+ * 切换到其他会话之前触发（可取消）
+ */
 export interface SessionBeforeSwitchEvent {
 	type: "session_before_switch";
 	/** Reason for the switch */
@@ -38,7 +51,10 @@ export interface SessionBeforeSwitchEvent {
 	targetSessionFile?: string;
 }
 
-/** Fired after switching to another session */
+/**
+ * Fired after switching to another session
+ * 切换到其他会话之后触发
+ */
 export interface SessionSwitchEvent {
 	type: "session_switch";
 	/** Reason for the switch */
@@ -47,20 +63,29 @@ export interface SessionSwitchEvent {
 	previousSessionFile: string | undefined;
 }
 
-/** Fired before branching a session (can be cancelled) */
+/**
+ * Fired before branching a session (can be cancelled)
+ * 在会话分叉之前触发（可取消）
+ */
 export interface SessionBeforeBranchEvent {
 	type: "session_before_branch";
 	/** ID of the entry to branch from */
 	entryId: string;
 }
 
-/** Fired after branching a session */
+/**
+ * Fired after branching a session
+ * 会话分叉之后触发
+ */
 export interface SessionBranchEvent {
 	type: "session_branch";
 	previousSessionFile: string | undefined;
 }
 
-/** Fired before context compaction (can be cancelled or customized) */
+/**
+ * Fired before context compaction (can be cancelled or customized)
+ * 在上下文压缩之前触发（可取消或自定义压缩流程）
+ */
 export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
 	/** Compaction preparation with messages to summarize, file ops, previous summary, etc. */
@@ -73,14 +98,20 @@ export interface SessionBeforeCompactEvent {
 	signal: AbortSignal;
 }
 
-/** Fired before compaction summarization to customize prompts/context */
+/**
+ * Fired before compaction summarization to customize prompts/context
+ * 在压缩总结之前触发，可用于自定义 prompt 和上下文
+ */
 export interface SessionCompactingEvent {
 	type: "session.compacting";
 	sessionId: string;
 	messages: AgentMessage[];
 }
 
-/** Fired after context compaction */
+/**
+ * Fired after context compaction
+ * 在上下文压缩之后触发
+ */
 export interface SessionCompactEvent {
 	type: "session_compact";
 	compactionEntry: CompactionEntry;
@@ -88,12 +119,18 @@ export interface SessionCompactEvent {
 	fromExtension: boolean;
 }
 
-/** Fired on process exit (SIGINT/SIGTERM) */
+/**
+ * Fired on process exit (SIGINT/SIGTERM)
+ * 进程退出（SIGINT/SIGTERM）时触发
+ */
 export interface SessionShutdownEvent {
 	type: "session_shutdown";
 }
 
-/** Preparation data for tree navigation (used by session_before_tree event) */
+/**
+ * Preparation data for tree navigation (used by session_before_tree event)
+ * 会话树导航的准备数据（用于 session_before_tree 事件）
+ */
 export interface TreePreparation {
 	/** Node being switched to */
 	targetId: string;
@@ -107,7 +144,10 @@ export interface TreePreparation {
 	userWantsSummary: boolean;
 }
 
-/** Fired before navigating to a different node in the session tree (can be cancelled) */
+/**
+ * Fired before navigating to a different node in the session tree (can be cancelled)
+ * 在会话树中跳转到其他节点之前触发（可取消）
+ */
 export interface SessionBeforeTreeEvent {
 	type: "session_before_tree";
 	/** Preparation data for the navigation */
@@ -116,7 +156,10 @@ export interface SessionBeforeTreeEvent {
 	signal: AbortSignal;
 }
 
-/** Fired after navigating to a different node in the session tree */
+/**
+ * Fired after navigating to a different node in the session tree
+ * 在会话树中跳转到其他节点之后触发
+ */
 export interface SessionTreeEvent {
 	type: "session_tree";
 	/** The new active leaf, null if navigated to before first entry */
@@ -129,13 +172,17 @@ export interface SessionTreeEvent {
 	fromExtension?: boolean;
 }
 
-/** Union of all session event types */
+/**
+ * Union of all session event types
+ * 当目标（Goal）更新时触发
+ */
 export interface GoalUpdatedEvent {
 	type: "goal_updated";
 	goal: Goal | null;
 	state?: GoalModeState;
 }
 
+/** 所有会话事件类型的联合 */
 export type SessionEvent =
 	| SessionStartEvent
 	| SessionBeforeSwitchEvent
@@ -151,7 +198,7 @@ export type SessionEvent =
 	| GoalUpdatedEvent;
 
 // ============================================================================
-// Agent / Turn Events
+// Agent / Turn Events  Agent / 轮次事件
 // ============================================================================
 
 /**
@@ -161,6 +208,11 @@ export type SessionEvent =
  * LLM are affected when a handler returns a replacement (the return shape
  * differs between extensions and hooks; see each subsystem's
  * `ContextEventResult`).
+ *
+ * 在每次 LLM 调用之前触发。
+ * 原始会话消息不会被修改——只有当 handler 返回替换内容时，
+ * 发送给 LLM 的消息才会被影响（返回结构在 extensions / hooks 中不同，
+ * 参见各自的 ContextEventResult）。
  */
 export interface ContextEvent {
 	type: "context";
@@ -170,25 +222,35 @@ export interface ContextEvent {
 
 /**
  * Fired when an agent loop starts (once per user prompt).
+ * Agent 循环开始时触发（每条用户 prompt 一次）。
  */
 export interface AgentStartEvent {
 	type: "agent_start";
 }
 
-/** Fired when an agent loop ends */
+/**
+ * Fired when an agent loop ends
+ * Agent 循环结束时触发
+ */
 export interface AgentEndEvent {
 	type: "agent_end";
 	messages: AgentMessage[];
 }
 
-/** Fired at the start of each turn */
+/**
+ * Fired at the start of each turn
+ * 每轮（turn）开始时触发
+ */
 export interface TurnStartEvent {
 	type: "turn_start";
 	turnIndex: number;
 	timestamp: number;
 }
 
-/** Fired at the end of each turn */
+/**
+ * Fired at the end of each turn
+ * 每轮（turn）结束时触发
+ */
 export interface TurnEndEvent {
 	type: "turn_end";
 	turnIndex: number;
@@ -197,17 +259,23 @@ export interface TurnEndEvent {
 }
 
 // ============================================================================
-// Auto-compaction / Auto-retry Events
+// Auto-compaction / Auto-retry Events  自动压缩 / 自动重试 事件
 // ============================================================================
 
-/** Fired when auto-compaction starts */
+/**
+ * Fired when auto-compaction starts
+ * 自动压缩开始时触发
+ */
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
 	reason: "threshold" | "overflow" | "idle";
 	action: "context-full" | "handoff";
 }
 
-/** Fired when auto-compaction ends */
+/**
+ * Fired when auto-compaction ends
+ * 自动压缩结束时触发
+ */
 export interface AutoCompactionEndEvent {
 	type: "auto_compaction_end";
 	action: "context-full" | "handoff";
@@ -219,7 +287,10 @@ export interface AutoCompactionEndEvent {
 	skipped?: boolean;
 }
 
-/** Fired when auto-retry starts */
+/**
+ * Fired when auto-retry starts
+ * 自动重试开始时触发
+ */
 export interface AutoRetryStartEvent {
 	type: "auto_retry_start";
 	attempt: number;
@@ -228,7 +299,10 @@ export interface AutoRetryStartEvent {
 	errorMessage: string;
 }
 
-/** Fired when auto-retry ends */
+/**
+ * Fired when auto-retry ends
+ * 自动重试结束时触发
+ */
 export interface AutoRetryEndEvent {
 	type: "auto_retry_end";
 	success: boolean;
@@ -237,16 +311,22 @@ export interface AutoRetryEndEvent {
 }
 
 // ============================================================================
-// TTSR / Todo Reminders
+// TTSR / Todo Reminders  TTSR / 待办事项提醒
 // ============================================================================
 
-/** Fired when TTSR rule matching interrupts generation */
+/**
+ * Fired when TTSR rule matching interrupts generation
+ * 当 TTSR（Trigger-To-Stop-Rule）规则匹配中断生成时触发
+ */
 export interface TtsrTriggeredEvent {
 	type: "ttsr_triggered";
 	rules: Rule[];
 }
 
-/** Fired when todo reminder logic detects unfinished todos */
+/**
+ * Fired when todo reminder logic detects unfinished todos
+ * 当 todo 提醒逻辑检测到未完成的待办事项时触发
+ */
 export interface TodoReminderEvent {
 	type: "todo_reminder";
 	todos: TodoItem[];
@@ -255,12 +335,14 @@ export interface TodoReminderEvent {
 }
 
 // ============================================================================
-// Shared Event Result Shapes
+// Shared Event Result Shapes  共享事件返回值结构
 // ============================================================================
 
 /**
  * Return type for `tool_call` handlers.
  * Allows handlers to block tool execution.
+ *
+ * `tool_call` handler 的返回类型，允许 handler 阻止工具执行。
  */
 export interface ToolCallEventResult {
 	/** If true, block the tool from executing */
@@ -272,6 +354,8 @@ export interface ToolCallEventResult {
 /**
  * Return type for `tool_result` handlers.
  * Allows handlers to modify tool results.
+ *
+ * `tool_result` handler 的返回类型，允许 handler 修改工具执行结果。
  */
 export interface ToolResultEventResult {
 	/** Replacement content array (text and images) */
@@ -282,13 +366,19 @@ export interface ToolResultEventResult {
 	isError?: boolean;
 }
 
-/** Return type for `session_before_switch` handlers */
+/**
+ * Return type for `session_before_switch` handlers
+ * `session_before_switch` handler 的返回类型
+ */
 export interface SessionBeforeSwitchResult {
 	/** If true, cancel the switch */
 	cancel?: boolean;
 }
 
-/** Return type for `session_before_branch` handlers */
+/**
+ * Return type for `session_before_branch` handlers
+ * `session_before_branch` handler 的返回类型
+ */
 export interface SessionBeforeBranchResult {
 	/**
 	 * If true, abort the branch entirely. No new session file is created,
@@ -310,7 +400,10 @@ export interface SessionBeforeBranchResult {
 	skipConversationRestore?: boolean;
 }
 
-/** Return type for `session_before_compact` handlers */
+/**
+ * Return type for `session_before_compact` handlers
+ * `session_before_compact` handler 的返回类型
+ */
 export interface SessionBeforeCompactResult {
 	/** If true, cancel the compaction */
 	cancel?: boolean;
@@ -318,7 +411,10 @@ export interface SessionBeforeCompactResult {
 	compaction?: CompactionResult;
 }
 
-/** Return type for `session.compacting` handlers */
+/**
+ * Return type for `session.compacting` handlers
+ * `session.compacting` handler 的返回类型
+ */
 export interface SessionCompactingResult {
 	/** Additional context lines to include in summary */
 	context?: string[];
@@ -328,7 +424,10 @@ export interface SessionCompactingResult {
 	preserveData?: Record<string, unknown>;
 }
 
-/** Return type for `session_before_tree` handlers */
+/**
+ * Return type for `session_before_tree` handlers
+ * `session_before_tree` handler 的返回类型
+ */
 export interface SessionBeforeTreeResult {
 	/** If true, cancel the navigation entirely */
 	cancel?: boolean;
@@ -341,3 +440,4 @@ export interface SessionBeforeTreeResult {
 		details?: unknown;
 	};
 }
+

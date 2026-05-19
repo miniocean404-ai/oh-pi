@@ -1,8 +1,13 @@
+
 /**
  * Custom command loader - loads TypeScript command modules using native Bun import.
  *
  * Dependencies (the zod-backed typebox shim and pi-coding-agent) are injected via the
  * CustomCommandAPI to avoid import resolution issues with custom commands loaded from user directories.
+ *
+ * 自定义命令加载器 —— 使用 Bun 原生 import 加载 TypeScript 命令模块。
+ * 依赖项（基于 zod 的 typebox 兼容层与 pi-coding-agent）通过 CustomCommandAPI 注入，
+ * 以避免从用户目录加载自定义命令时出现的 import 解析问题。
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -24,6 +29,7 @@ import type {
 
 /**
  * Load a single command module using native Bun import.
+ * 使用 Bun 原生 import 加载单个命令模块。
  */
 async function loadCommandModule(
 	commandPath: string,
@@ -32,6 +38,7 @@ async function loadCommandModule(
 ): Promise<{ commands: CustomCommand[] | null; error: string | null }> {
 	try {
 		const module = await import(commandPath);
+		// 优先取默认导出，否则将整个模块视为工厂函数
 		const factory = (module.default ?? module) as CustomCommandFactory;
 
 		if (typeof factory !== "function") {
@@ -39,9 +46,11 @@ async function loadCommandModule(
 		}
 
 		const result = await factory(sharedApi);
+		// 支持工厂返回单个命令或命令数组
 		const commands = Array.isArray(result) ? result : [result];
 
 		// Validate commands
+		// 校验命令必填字段：name / description / execute
 		for (const cmd of commands) {
 			if (!cmd.name || typeof cmd.name !== "string") {
 				return { commands: null, error: "Command must have a name" };
@@ -61,21 +70,29 @@ async function loadCommandModule(
 	}
 }
 
+/** 自定义命令发现选项 */
 export interface DiscoverCustomCommandsOptions {
-	/** Current working directory. Default: getProjectDir() */
+	/** Current working directory. Default: getProjectDir()
+	 *  当前工作目录，默认取 getProjectDir() */
 	cwd?: string;
-	/** Agent config directory. Default: from getAgentDir() */
+	/** Agent config directory. Default: from getAgentDir()
+	 *  Agent 配置目录，默认取 getAgentDir() */
 	agentDir?: string;
 }
 
+/** 命令模块发现结果 */
 export interface DiscoverCustomCommandsResult {
-	/** Paths to command modules */
+	/** Paths to command modules
+	 *  命令模块路径列表及其来源 */
 	paths: Array<{ path: string; source: CustomCommandSource }>;
 }
 
 /**
  * Discover custom command modules (TypeScript slash commands).
  * Markdown slash commands are handled by core/slash-commands.ts.
+ *
+ * 发现自定义命令模块（TypeScript 斜杠命令）。
+ * Markdown 斜杠命令由 core/slash-commands.ts 处理。
  */
 export async function discoverCustomCommands(
 	options: DiscoverCustomCommandsOptions = {},
@@ -85,6 +102,7 @@ export async function discoverCustomCommands(
 	const paths: Array<{ path: string; source: CustomCommandSource }> = [];
 	const seen = new Set<string>();
 
+	// 添加路径并按解析后的绝对路径去重
 	const addPath = (commandPath: string, source: CustomCommandSource): void => {
 		const resolved = path.resolve(commandPath);
 		if (seen.has(resolved)) return;
@@ -93,6 +111,7 @@ export async function discoverCustomCommands(
 	};
 
 	const commandDirs: Array<{ path: string; source: CustomCommandSource }> = [];
+	// 用户级 commands 目录（来自 agent 配置目录）
 	if (agentDir) {
 		const userCommandsDir = path.join(agentDir, "commands");
 		if (fs.existsSync(userCommandsDir)) {
@@ -100,6 +119,7 @@ export async function discoverCustomCommands(
 		}
 	}
 
+	// 从分层配置目录中追加 commands 目录（user / project 级别）
 	for (const entry of getConfigDirs("commands", { cwd, existingOnly: true })) {
 		const source = entry.level === "user" ? "user" : "project";
 		if (!commandDirs.some(d => d.path === entry.path)) {
@@ -107,6 +127,7 @@ export async function discoverCustomCommands(
 		}
 	}
 
+	// 在每个命令子目录中查找入口文件（支持 .ts/.js/.mjs/.cjs）
 	const indexCandidates = ["index.ts", "index.js", "index.mjs", "index.cjs"];
 	for (const { path: commandsDir, source } of commandDirs) {
 		let entries: fs.Dirent[];
@@ -119,6 +140,7 @@ export async function discoverCustomCommands(
 			continue;
 		}
 		for (const entry of entries) {
+			// 跳过非目录条目和隐藏目录
 			if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
 			const commandDir = path.join(commandsDir, entry.name);
 
@@ -135,20 +157,25 @@ export async function discoverCustomCommands(
 	return { paths };
 }
 
+/** 自定义命令加载选项 */
 export interface LoadCustomCommandsOptions {
-	/** Current working directory. Default: getProjectDir() */
+	/** Current working directory. Default: getProjectDir()
+	 *  当前工作目录，默认取 getProjectDir() */
 	cwd?: string;
-	/** Agent config directory. Default: from getAgentDir() */
+	/** Agent config directory. Default: from getAgentDir()
+	 *  Agent 配置目录，默认取 getAgentDir() */
 	agentDir?: string;
 }
 
 /**
  * Load bundled commands (shipped with pi-coding-agent).
+ * 加载内置（随 pi-coding-agent 一起发布）命令。
  */
 function loadBundledCommands(sharedApi: CustomCommandAPI): LoadedCustomCommand[] {
 	const bundled: LoadedCustomCommand[] = [];
 
 	// Add bundled commands here
+	// 在此注册内置命令
 	bundled.push({
 		path: "bundled:green",
 		resolvedPath: "bundled:green",
@@ -167,6 +194,7 @@ function loadBundledCommands(sharedApi: CustomCommandAPI): LoadedCustomCommand[]
 
 /**
  * Discover and load custom commands from standard locations.
+ * 从标准位置发现并加载所有自定义命令。
  */
 export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}): Promise<CustomCommandsLoadResult> {
 	const cwd = options.cwd ?? getProjectDir();
@@ -179,6 +207,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 	const seenNames = new Set<string>();
 
 	// Shared API object - all commands get the same instance
+	// 共享 API 对象 —— 所有命令共用同一实例
 	const sharedApi: CustomCommandAPI = {
 		cwd,
 		exec: (command: string, args: string[], execOptions) =>
@@ -189,12 +218,14 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 	};
 
 	// 1. Load bundled commands first (lowest priority - can be overridden)
+	// 1. 先加载内置命令（优先级最低，可被覆盖）
 	for (const loaded of loadBundledCommands(sharedApi)) {
 		seenNames.add(loaded.command.name);
 		commands.push(loaded);
 	}
 
 	// 2. Load user/project commands (can override bundled)
+	// 2. 加载用户级 / 项目级命令（可覆盖内置命令）
 	for (const { path: commandPath, source } of paths) {
 		const { commands: loadedCommands, error } = await loadCommandModule(commandPath, cwd, sharedApi);
 
@@ -206,15 +237,18 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 		if (loadedCommands) {
 			for (const command of loadedCommands) {
 				// Allow overriding bundled commands, but not user/project conflicts
+				// 允许覆盖内置命令，但不允许 user/project 命令之间出现冲突
 				const existingIdx = commands.findIndex(c => c.command.name === command.name);
 				if (existingIdx !== -1) {
 					const existing = commands[existingIdx];
 					if (existing.source === "bundled") {
 						// Override bundled command
+						// 覆盖内置命令
 						commands.splice(existingIdx, 1);
 						seenNames.delete(command.name);
 					} else {
 						// Conflict between user/project commands
+						// 用户级与项目级命令之间的命名冲突
 						errors.push({
 							path: commandPath,
 							error: `Command name "${command.name}" conflicts with existing command`,
@@ -236,3 +270,4 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 
 	return { commands, errors };
 }
+

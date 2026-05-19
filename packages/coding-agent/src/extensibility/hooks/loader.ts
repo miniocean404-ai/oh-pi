@@ -1,5 +1,7 @@
+
 /**
  * Hook loader - loads TypeScript hook modules using native Bun import.
+ * Hook 加载器 —— 通过 Bun 原生 import 加载 TypeScript hook 模块。
  */
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -16,11 +18,13 @@ import type { ExecOptions, HookAPI, HookFactory, HookMessageRenderer, Registered
 
 /**
  * Generic handler function type.
+ * 通用的处理器函数类型。
  */
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
 /**
  * Send message handler type for pi.sendMessage().
+ * `pi.sendMessage()` 实际执行处理器的签名。
  */
 export type SendMessageHandler = <T = unknown>(
 	message: Pick<HookMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
@@ -29,11 +33,13 @@ export type SendMessageHandler = <T = unknown>(
 
 /**
  * Append entry handler type for pi.appendEntry().
+ * `pi.appendEntry()` 实际执行处理器的签名。
  */
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
 /**
  * New session handler type for ctx.newSession() in HookCommandContext.
+ * HookCommandContext 中 `ctx.newSession()` 处理器签名。
  */
 export type NewSessionHandler = (options?: {
 	parentSession?: string;
@@ -42,11 +48,13 @@ export type NewSessionHandler = (options?: {
 
 /**
  * Branch handler type for ctx.branch() in HookCommandContext.
+ * HookCommandContext 中 `ctx.branch()` 处理器签名。
  */
 export type BranchHandler = (entryId: string) => Promise<{ cancelled: boolean }>;
 
 /**
  * Navigate tree handler type for ctx.navigateTree() in HookCommandContext.
+ * HookCommandContext 中 `ctx.navigateTree()` 处理器签名。
  */
 export type NavigateTreeHandler = (
 	targetId: string,
@@ -55,6 +63,7 @@ export type NavigateTreeHandler = (
 
 /**
  * Registered handlers for a loaded hook.
+ * 已加载 hook 注册的处理器集合。
  */
 export interface LoadedHook {
 	/** Original path from config */
@@ -75,6 +84,7 @@ export interface LoadedHook {
 
 /**
  * Result of loading hooks.
+ * Hook 加载结果。
  */
 export interface LoadHooksResult {
 	/** Successfully loaded hooks */
@@ -86,6 +96,9 @@ export interface LoadHooksResult {
 /**
  * Create a HookAPI instance that collects handlers, renderers, and commands.
  * Returns the API, maps, and functions to set handlers later.
+ *
+ * 创建一个 HookAPI 实例，用于在工厂函数中收集事件处理器、消息渲染器和命令。
+ * 返回 API 本身、各内部映射，以及稍后注入 sendMessage/appendEntry 处理器的函数。
  */
 async function createHookAPI(
 	handlers: Map<string, HandlerFn[]>,
@@ -104,6 +117,8 @@ async function createHookAPI(
 
 	// Cast to HookAPI - the implementation is more general (string event names)
 	// but the interface has specific overloads for type safety in hooks
+	// 强制转换为 HookAPI：实现接受任意字符串事件名，
+	// 而对外接口提供了具体的重载以保证 hook 编写时的类型安全。
 	const api = {
 		on(event: string, handler: HandlerFn): void {
 			if (!handlers.has(event)) {
@@ -156,12 +171,14 @@ async function createHookAPI(
 
 /**
  * Load a single hook module using native Bun import.
+ * 通过 Bun 原生 import 加载单个 hook 模块。
  */
 async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHook | null; error: string | null }> {
 	const resolvedPath = resolvePath(hookPath, cwd);
 
 	try {
 		// Import the module using native Bun import
+		// 通过 Bun 原生 import 引入模块
 		const module = await import(resolvedPath);
 		const factory = module.default as HookFactory;
 
@@ -170,6 +187,7 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
 		}
 
 		// Create handlers map and API
+		// 创建处理器映射以及 HookAPI 实例
 		const handlers = new Map<string, HandlerFn[]>();
 		const { api, messageRenderers, commands, setSendMessageHandler, setAppendEntryHandler } = await createHookAPI(
 			handlers,
@@ -177,6 +195,7 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
 		);
 
 		// Call factory to register handlers
+		// 调用工厂函数，让 hook 完成 handler/renderer/command 注册
 		factory(api);
 
 		return {
@@ -201,6 +220,10 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
  * Load all hooks from configuration.
  * @param paths - Array of hook file paths
  * @param cwd - Current working directory for resolving relative paths
+ *
+ * 根据配置批量加载 hooks。
+ * @param paths - hook 文件路径列表
+ * @param cwd - 用于解析相对路径的当前工作目录
  */
 export async function loadHooks(paths: string[], cwd: string): Promise<LoadHooksResult> {
 	const hooks: LoadedHook[] = [];
@@ -230,12 +253,21 @@ export async function loadHooks(paths: string[], cwd: string): Promise<LoadHooks
  * 3. Other editor/IDE configurations
  *
  * Plus any explicitly configured paths from settings.
+ *
+ * 从所有已注册 provider 发现并加载 hooks。
+ * 通过 capability API 发现来自以下来源的 hook 路径：
+ * 1. OMP 原生配置（.omp/.pi 的 hooks/ 目录）
+ * 2. 已安装的插件
+ * 3. 其他编辑器/IDE 配置
+ *
+ * 同时加上 settings 中显式配置的路径。
  */
 export async function discoverAndLoadHooks(configuredPaths: string[], cwd: string): Promise<LoadHooksResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
 
 	// Helper to add paths without duplicates
+	// 去重后追加路径
 	const addPaths = (paths: string[]) => {
 		for (const p of paths) {
 			const resolved = path.resolve(p);
@@ -247,11 +279,14 @@ export async function discoverAndLoadHooks(configuredPaths: string[], cwd: strin
 	};
 
 	// 1. Discover hooks via capability API
+	// 1. 通过 capability API 发现 hook
 	const discovered = await loadCapability<Hook>(hookCapability.id, { cwd });
 	addPaths(discovered.items.map(hook => hook.path));
 
 	// 2. Explicitly configured paths (can override/add)
+	// 2. 显式配置的路径（可追加或覆盖）
 	addPaths(configuredPaths.map(p => resolvePath(p, cwd)));
 
 	return loadHooks(allPaths, cwd);
 }
+

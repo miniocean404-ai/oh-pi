@@ -1,5 +1,7 @@
+
 /**
  * Extension loader - loads TypeScript extension modules using native Bun import.
+ * 扩展加载器 —— 通过 Bun 原生 import 加载 TypeScript 扩展模块。
  */
 import type * as fs1 from "node:fs";
 import * as fs from "node:fs/promises";
@@ -43,6 +45,9 @@ function getExtensionFactory(module: LoadedExtensionModule): ExtensionFactory | 
 	return typeof candidate === "function" ? candidate : null;
 }
 
+/**
+ * 当扩展在加载阶段调用动作类方法（尚未完成 runtime 初始化）时抛出。
+ */
 export class ExtensionRuntimeNotInitializedError extends Error {
 	constructor() {
 		super("Extension runtime not initialized. Action methods cannot be called during extension loading.");
@@ -52,6 +57,9 @@ export class ExtensionRuntimeNotInitializedError extends Error {
 /**
  * Extension runtime with throwing stubs for action methods.
  * These are replaced with real implementations during initialization.
+ *
+ * 扩展运行时：所有动作方法默认抛出 {@link ExtensionRuntimeNotInitializedError}，
+ * 真实实现会在 `ExtensionRunner.initialize()` 阶段替换进来。
  */
 export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
@@ -115,6 +123,10 @@ export class ExtensionRuntime implements IExtensionRuntime {
  * ExtensionAPI implementation for an extension.
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
+ *
+ * 单个扩展使用的 ExtensionAPI 实现：
+ * - 注册类方法（registerXxx）将信息写入对应的 Extension 对象；
+ * - 动作类方法（sendMessage 等）转发到共享的 runtime。
  */
 class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	readonly logger = logger;
@@ -260,6 +272,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 /**
  * Create an Extension object with empty collections.
+ * 创建一个空集合状态的 Extension 对象，待后续注册流程填充。
  */
 function createExtension(extensionPath: string, resolvedPath: string): Extension {
 	return {
@@ -311,6 +324,7 @@ async function loadExtension(
 
 /**
  * Create an Extension from an inline factory function.
+ * 从内联工厂函数创建 Extension 实例（用于测试或动态注入）。
  */
 export async function loadExtensionFromFactory(
 	factory: ExtensionFactory,
@@ -327,6 +341,7 @@ export async function loadExtensionFromFactory(
 
 /**
  * Load extensions from paths.
+ * 根据给定路径列表加载扩展模块，返回扩展集合、错误列表以及共享的 runtime。
  */
 export async function loadExtensions(paths: string[], cwd: string, eventBus?: EventBus): Promise<LoadExtensionsResult> {
 	const extensions: Extension[] = [];
@@ -383,6 +398,8 @@ function isExtensionFile(name: string): boolean {
 
 /**
  * Resolve extension entry points from a directory.
+ * 从指定目录解析扩展入口文件：优先读取 package.json 中的 `omp`/`pi` 清单，
+ * 否则回退到 `index.ts` 或 `index.js`。
  */
 async function resolveExtensionEntries(dir: string): Promise<string[] | null> {
 	const packageJsonPath = path.join(dir, "package.json");
@@ -439,17 +456,29 @@ async function resolveExtensionEntries(dir: string): Promise<string[] | null> {
  * 3. Subdirectory with package.json: `extensions/<ext>/package.json` with "omp"/"pi" field → load declared paths
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
+ *
+ * 在指定目录下发现扩展。
+ *
+ * 发现规则：
+ * 1. 直接文件：`extensions/*.ts` 或 `*.js` → 加载
+ * 2. 子目录带 index：`extensions/<ext>/index.ts` 或 `index.js` → 加载
+ * 3. 子目录带 package.json：`extensions/<ext>/package.json` 包含 `omp`/`pi`
+ *    字段 → 按清单加载声明的路径
+ *
+ * 仅向下递归一层；更复杂的包必须通过 package.json 清单声明入口。
  */
 async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 	const discovered: string[] = [];
 
 	// First check if this directory itself has explicit extension entries (package.json or index)
+	// 先检查目录自身是否就是一个扩展包（package.json 或 index）
 	const rootEntries = await resolveExtensionEntries(dir);
 	if (rootEntries) {
 		return rootEntries;
 	}
 
 	// Otherwise, discover extensions from directory contents
+	// 否则枚举目录下的内容来发现扩展
 	let entries: fs1.Dirent[];
 	try {
 		entries = await fs.readdir(dir, { withFileTypes: true });
@@ -480,6 +509,11 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 
 /**
  * Discover and load extensions from standard locations.
+ *
+ * 从标准位置发现并加载扩展：
+ * 1. 通过 capability API 发现的原生 .omp/.pi 扩展模块；
+ * 2. 已安装插件中的扩展入口；
+ * 3. 显式配置路径（支持文件、目录或扩展包）。
  */
 export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
@@ -509,6 +543,7 @@ export async function discoverAndLoadExtensions(
 	};
 
 	// 1. Discover extension modules via capability API (native .omp/.pi only)
+	// 1. 通过 capability API 发现扩展模块（仅原生 .omp/.pi 来源）
 	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, { cwd });
 	for (const ext of discovered.items) {
 		if (ext._source.provider !== "native") continue;
@@ -517,9 +552,11 @@ export async function discoverAndLoadExtensions(
 	}
 
 	// 2. Discover extension entry points from installed plugins
+	// 2. 从已安装插件中发现扩展入口
 	addPaths(await getAllPluginExtensionPaths(cwd));
 
 	// 3. Explicitly configured paths
+	// 3. 处理用户显式配置的路径（文件 / 目录 / 扩展包）
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
 
@@ -549,3 +586,4 @@ export async function discoverAndLoadExtensions(
 
 	return loadExtensions(allPaths, cwd, eventBus);
 }
+
