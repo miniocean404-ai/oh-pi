@@ -1,3 +1,4 @@
+
 start: begin_patch hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
@@ -17,3 +18,4 @@ change_line: ("+" | "-" | " ") /(.*)/ LF
 eof_line: "*** End of File" LF
 
 %import common.LF
+

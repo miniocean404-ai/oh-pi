@@ -1,12 +1,16 @@
+
 /**
  * MCP JSON-RPC 2.0 over HTTPS.
+ * 基于 HTTPS 的 MCP JSON-RPC 2.0。
  *
  * Lightweight utilities for calling MCP servers directly via HTTP
  * without maintaining persistent connections.
+ * 用于通过 HTTP 直接调用 MCP 服务器的轻量级工具，无需维护持久连接。
  */
 import { logger } from "@oh-my-pi/pi-utils";
 
 /** Parse SSE response format (lines starting with "data: ") */
+/** 解析 SSE 响应格式（以 "data: " 开头的行） */
 export function parseSSE(text: string): unknown {
 	const lines = text.split("\n");
 	for (const line of lines) {
@@ -17,7 +21,7 @@ export function parseSSE(text: string): unknown {
 			if (result) return result;
 		}
 	}
-	// Fallback: try parsing entire response as JSON
+	// 回退：尝试将整个响应解析为 JSON
 	try {
 		return JSON.parse(text);
 	} catch {
@@ -26,6 +30,7 @@ export function parseSSE(text: string): unknown {
 }
 
 /** JSON-RPC 2.0 response structure */
+/** JSON-RPC 2.0 响应结构 */
 export interface JsonRpcResponse<T = unknown> {
 	jsonrpc: "2.0";
 	id: string | number;
@@ -39,11 +44,12 @@ export interface JsonRpcResponse<T = unknown> {
 
 /**
  * Call an MCP server with JSON-RPC 2.0 over HTTPS.
+ * 通过 HTTPS 使用 JSON-RPC 2.0 调用 MCP 服务器。
  *
- * @param url - Full MCP server URL (including any query parameters)
- * @param method - JSON-RPC method name (e.g., "tools/list", "tools/call")
- * @param params - Method parameters
- * @returns Parsed JSON-RPC response
+ * @param url - Full MCP server URL (including any query parameters) 完整的 MCP 服务器 URL（包含查询参数）
+ * @param method - JSON-RPC method name (e.g., "tools/list", "tools/call") JSON-RPC 方法名称
+ * @param params - Method parameters 方法参数
+ * @returns Parsed JSON-RPC response 解析后的 JSON-RPC 响应
  */
 export async function callMCP<T = unknown>(
 	url: string,
@@ -82,3 +88,4 @@ export async function callMCP<T = unknown>(
 
 	return result;
 }
+

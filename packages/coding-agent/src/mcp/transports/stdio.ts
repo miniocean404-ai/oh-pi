@@ -1,8 +1,11 @@
+
 /**
  * MCP stdio transport.
+ * MCP 标准 IO 传输。
  *
  * Implements JSON-RPC 2.0 over subprocess stdin/stdout.
  * Messages are newline-delimited JSON.
+ * 基于子进程 stdin/stdout 实现 JSON-RPC 2.0。消息以换行符分隔的 JSON 格式传输。
  */
 
 import { getProjectDir, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
@@ -21,9 +24,13 @@ import { toJsonRpcError } from "../../mcp/types";
 /**
  * Stdio transport for MCP servers.
  * Spawns a subprocess and communicates via stdin/stdout.
+ * MCP 服务器的标准 IO 传输实现。
+ * 启动子进程并通过 stdin/stdout 通信。
  */
 export class StdioTransport implements MCPTransport {
+	/** 子进程实例 */
 	#process: Subprocess<"pipe", "pipe", "pipe"> | null = null;
+	/** 待处理的请求（按 ID 索引） */
 	#pendingRequests = new Map<
 		string | number,
 		{
@@ -31,12 +38,18 @@ export class StdioTransport implements MCPTransport {
 			reject: (error: Error) => void;
 		}
 	>();
+	/** 是否已连接 */
 	#connected = false;
+	/** 读取循环 Promise */
 	#readLoop: Promise<void> | null = null;
 
+	/** 连接关闭回调 */
 	onClose?: () => void;
+	/** 错误回调 */
 	onError?: (error: Error) => void;
+	/** 通知回调 */
 	onNotification?: (method: string, params: unknown) => void;
+	/** 服务器请求回调 */
 	onRequest?: (method: string, params: unknown) => Promise<unknown>;
 
 	constructor(private config: MCPStdioServerConfig) {}
@@ -47,6 +60,7 @@ export class StdioTransport implements MCPTransport {
 
 	/**
 	 * Start the subprocess and begin reading.
+	 * 启动子进程并开始读取。
 	 */
 	async connect(): Promise<void> {
 		if (this.#connected) return;
@@ -68,13 +82,14 @@ export class StdioTransport implements MCPTransport {
 
 		this.#connected = true;
 
-		// Start reading stdout
+		// 开始读取 stdout
 		this.#readLoop = this.#startReadLoop();
 
-		// Log stderr for debugging
+		// 记录 stderr 用于调试
 		this.#startStderrLoop();
 	}
 
+	/** 从 stdout 读取 JSONL 消息的循环 */
 	async #startReadLoop(): Promise<void> {
 		if (!this.#process?.stdout) return;
 		try {
@@ -83,7 +98,7 @@ export class StdioTransport implements MCPTransport {
 				try {
 					this.#handleMessage(line as JsonRpcMessage);
 				} catch {
-					// Skip malformed lines
+					// 跳过格式错误的行
 				}
 			}
 		} catch (error) {
@@ -95,6 +110,7 @@ export class StdioTransport implements MCPTransport {
 		}
 	}
 
+	/** 读取 stderr 输出的循环（用于日志） */
 	async #startStderrLoop(): Promise<void> {
 		if (!this.#process?.stderr) return;
 
@@ -105,32 +121,33 @@ export class StdioTransport implements MCPTransport {
 			while (this.#connected) {
 				const { done, value } = await reader.read();
 				if (done) break;
-				// Log stderr but don't treat as error - servers use it for logging
+				// 记录 stderr 但不视为错误 — 服务器将其用于日志输出
 				const text = decoder.decode(value, { stream: true });
 				if (text.trim()) {
-					// Could expose via onStderr callback if needed
-					// For now, silent - MCP spec says clients MAY capture/ignore
+					// 可通过 onStderr 回调暴露（如有需要）
+					// 目前静默处理 — MCP 规范规定客户端可以捕获或忽略
 				}
 			}
 		} catch {
-			// Ignore stderr read errors
+			// 忽略 stderr 读取错误
 		} finally {
 			reader.releaseLock();
 		}
 	}
 
+	/** 处理接收到的 JSON-RPC 消息（请求、响应或通知） */
 	#handleMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
 		if (Array.isArray(message)) {
 			for (const m of message) this.#handleMessage(m);
 			return;
 		}
-		// Server-to-client request: has both method and id
+		// 服务器到客户端的请求：同时包含 method 和 id
 		if ("method" in message && "id" in message && message.id != null) {
 			void this.#handleServerRequest(message as JsonRpcRequest);
 			return;
 		}
 
-		// Response to our request: has id
+		// 对我们请求的响应：包含 id
 		if ("id" in message && message.id != null) {
 			const response = message as JsonRpcResponse;
 			const pending = this.#pendingRequests.get(response.id);
@@ -145,13 +162,14 @@ export class StdioTransport implements MCPTransport {
 			return;
 		}
 
-		// Notification: has method but no id
+		// 通知：有 method 但无 id
 		if ("method" in message) {
 			const notification = message as { method: string; params?: unknown };
 			this.onNotification?.(notification.method, notification.params);
 		}
 	}
 
+	/** 处理服务器到客户端的 JSON-RPC 请求 */
 	async #handleServerRequest(request: JsonRpcRequest): Promise<void> {
 		try {
 			if (!this.onRequest) {
@@ -164,11 +182,12 @@ export class StdioTransport implements MCPTransport {
 			try {
 				this.#sendResponse(request.id, undefined, toJsonRpcError(error));
 			} catch {
-				// Best-effort — process may have exited
+				// 尽力交付 — 进程可能已退出
 			}
 		}
 	}
 
+	/** 通过 stdin 发送 JSON-RPC 响应 */
 	#sendResponse(id: string | number, result?: unknown, error?: JsonRpcError): void {
 		if (!this.#connected || !this.#process?.stdin) return;
 		const response = error
@@ -178,11 +197,12 @@ export class StdioTransport implements MCPTransport {
 		this.#process.stdin.flush();
 	}
 
+	/** 处理连接关闭，拒绝所有待处理的请求 */
 	#handleClose(): void {
 		if (!this.#connected) return;
 		this.#connected = false;
 
-		// Reject all pending requests
+		// 拒绝所有待处理的请求
 		for (const [, pending] of this.#pendingRequests) {
 			pending.reject(new Error("Transport closed"));
 		}
@@ -191,6 +211,7 @@ export class StdioTransport implements MCPTransport {
 		this.onClose?.();
 	}
 
+	/** 发送 JSON-RPC 请求并等待响应，支持超时和中止信号 */
 	async request<T = unknown>(
 		method: string,
 		params?: Record<string, unknown>,
@@ -261,7 +282,7 @@ export class StdioTransport implements MCPTransport {
 
 		const message = `${JSON.stringify(request)}\n`;
 		try {
-			// Bun's FileSink has write() method directly
+			// Bun 的 FileSink 直接提供 write() 方法
 			this.#process.stdin.write(message);
 			this.#process.stdin.flush();
 		} catch (error: unknown) {
@@ -272,6 +293,7 @@ export class StdioTransport implements MCPTransport {
 		return promise;
 	}
 
+	/** 发送 JSON-RPC 通知（无需响应） */
 	async notify(method: string, params?: Record<string, unknown>): Promise<void> {
 		if (!this.#connected || !this.#process?.stdin) {
 			throw new Error("Transport not connected");
@@ -284,28 +306,29 @@ export class StdioTransport implements MCPTransport {
 		};
 
 		const message = `${JSON.stringify(notification)}\n`;
-		// Bun's FileSink has write() method directly
+		// Bun 的 FileSink 直接提供 write() 方法
 		this.#process.stdin.write(message);
 		this.#process.stdin.flush();
 	}
 
+	/** 关闭传输连接，终止子进程并拒绝所有待处理的请求 */
 	async close(): Promise<void> {
 		if (!this.#connected) return;
 		this.#connected = false;
 
-		// Reject pending requests
+		// 拒绝待处理的请求
 		for (const [, pending] of this.#pendingRequests) {
 			pending.reject(new Error("Transport closed"));
 		}
 		this.#pendingRequests.clear();
 
-		// Kill subprocess
+		// 终止子进程
 		if (this.#process) {
 			this.#process.kill();
 			this.#process = null;
 		}
 
-		// Wait for read loop to finish
+		// 等待读取循环结束
 		if (this.#readLoop) {
 			await this.#readLoop.catch(() => {});
 			this.#readLoop = null;
@@ -317,9 +340,11 @@ export class StdioTransport implements MCPTransport {
 
 /**
  * Create and connect a stdio transport.
+ * 创建并连接标准 IO 传输。
  */
 export async function createStdioTransport(config: MCPStdioServerConfig): Promise<StdioTransport> {
 	const transport = new StdioTransport(config);
 	await transport.connect();
 	return transport;
 }
+

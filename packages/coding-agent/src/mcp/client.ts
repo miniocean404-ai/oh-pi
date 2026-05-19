@@ -1,7 +1,10 @@
+
 /**
  * MCP Client.
+ * MCP 客户端。
  *
  * Handles connection initialization, tool listing, and tool calling.
+ * 处理连接初始化、工具列表获取和工具调用。
  */
 import * as path from "node:path";
 import * as url from "node:url";
@@ -37,12 +40,15 @@ import type {
 } from "./types";
 
 /** MCP protocol version we support */
+/** 我们支持的 MCP 协议版本 */
 const PROTOCOL_VERSION = "2025-03-26";
 
 /** Default connection timeout in ms */
+/** 默认连接超时时间（毫秒） */
 const CONNECTION_TIMEOUT_MS = 30_000;
 
 /** Client info sent during initialization */
+/** 初始化时发送的客户端信息 */
 const CLIENT_INFO = {
 	name: "omp-coding-agent",
 	version: "1.0.0",
@@ -50,9 +56,12 @@ const CLIENT_INFO = {
 
 /**
  * Default handler for standard MCP server-to-client requests.
+ * 标准 MCP 服务器到客户端请求的默认处理器。
  * Handles `ping` and `roots/list`; rejects unknown methods with -32601.
+ * 处理 `ping` 和 `roots/list`；未知方法返回 -32601 错误。
  * Reads getProjectDir() at call time so the root stays stable even if
  * the process cwd changes during tool execution.
+ * 在调用时读取 getProjectDir()，即使进程 cwd 在工具执行期间变更，根目录也保持稳定。
  */
 async function defaultRequestHandler(method: string, _params: unknown): Promise<unknown> {
 	switch (method) {
@@ -71,6 +80,7 @@ async function defaultRequestHandler(method: string, _params: unknown): Promise<
 
 /**
  * Create a transport for the given server config.
+ * 为给定的服务器配置创建传输层。
  */
 async function createTransport(config: MCPServerConfig): Promise<MCPTransport> {
 	const serverType = config.type ?? "stdio";
@@ -88,6 +98,7 @@ async function createTransport(config: MCPServerConfig): Promise<MCPTransport> {
 
 /**
  * Initialize connection with MCP server.
+ * 初始化与 MCP 服务器的连接。
  */
 async function initializeConnection(
 	transport: MCPTransport,
@@ -115,12 +126,12 @@ async function initializeConnection(
 		throw options.signal.reason instanceof Error ? options.signal.reason : new Error("Aborted");
 	}
 
-	// Hook point: the transport now has the session ID from the initialize response.
-	// For HTTP, this is the moment to open the SSE stream so server-to-client requests
-	// triggered by notifications/initialized (e.g. roots/list) can be delivered.
+	// 挂载点：传输层现在已从初始化响应中获取会话 ID。
+	// 对于 HTTP，此时应打开 SSE 流，以便由 notifications/initialized
+	// 触发的服务器到客户端请求（如 roots/list）能够被送达。
 	await options?.onInitialized?.();
 
-	// Send initialized notification
+	// 发送 initialized 通知
 	await transport.notify("notifications/initialized");
 
 	return result;
@@ -128,7 +139,9 @@ async function initializeConnection(
 
 /**
  * Connect to an MCP server.
+ * 连接到 MCP 服务器。
  * Has a 30 second timeout to prevent blocking startup.
+ * 设有 30 秒超时以防止阻塞启动。
  */
 export async function connectToServer(
 	name: string,
@@ -148,17 +161,17 @@ export async function connectToServer(
 			transport.onNotification = options.onNotification;
 		}
 
-		// Always handle standard MCP server-to-client requests (ping, roots/list).
-		// The initialize request declares roots capability, so we must respond to
-		// roots/list — even for short-lived test connections.
+		// 始终处理标准的 MCP 服务器到客户端请求（ping、roots/list）。
+		// 初始化请求声明了 roots 能力，因此必须响应
+		// roots/list —— 即使是短暂的测试连接也不例外。
 		transport.onRequest = options?.onRequest ?? defaultRequestHandler;
 
 		try {
 			const initResult = await initializeConnection(transport, {
 				signal: options?.signal,
 				async onInitialized() {
-					// Open the SSE stream before sending initialized, so server-to-client
-					// requests triggered by on_initialized (e.g. roots/list) are delivered.
+					// 在发送 initialized 之前打开 SSE 流，以确保由 on_initialized
+					// 触发的服务器到客户端请求（如 roots/list）能够被送达。
 					if ("startSSEListener" in transport! && typeof transport!.startSSEListener === "function") {
 						await (transport as { startSSEListener(): Promise<void> }).startSSEListener();
 					}
@@ -187,8 +200,8 @@ export async function connectToServer(
 			options?.signal,
 		);
 	} catch (error) {
-		// If withTimeout rejected (timeout/abort) while connect() was still pending,
-		// the transport may be alive with an open SSE listener. Close it.
+		// 如果 withTimeout 在 connect() 仍在等待时拒绝（超时/中止），
+		// 传输层可能仍活跃且有打开的 SSE 监听器。关闭它。
 		if (transport) {
 			void transport.close().catch(() => {});
 		}
@@ -198,17 +211,18 @@ export async function connectToServer(
 
 /**
  * List tools from a connected server.
+ * 从已连接的服务器获取工具列表。
  */
 export async function listTools(
 	connection: MCPServerConnection,
 	options?: { signal?: AbortSignal },
 ): Promise<MCPToolDefinition[]> {
-	// Check if server supports tools
+	// 检查服务器是否支持工具
 	if (!connection.capabilities.tools) {
 		return [];
 	}
 
-	// Return cached tools if available
+	// 如果有缓存则返回缓存的工具
 	if (connection.tools) {
 		return connection.tools;
 	}
@@ -227,7 +241,7 @@ export async function listTools(
 		cursor = result.nextCursor;
 	} while (cursor);
 
-	// Cache tools
+	// 缓存工具列表
 	connection.tools = allTools;
 
 	return allTools;
@@ -235,6 +249,7 @@ export async function listTools(
 
 /**
  * Call a tool on a connected server.
+ * 调用已连接服务器上的工具。
  */
 export async function callTool(
 	connection: MCPServerConnection,
@@ -256,6 +271,7 @@ export async function callTool(
 
 /**
  * Disconnect from a server.
+ * 断开与服务器的连接。
  */
 export async function disconnectServer(connection: MCPServerConnection): Promise<void> {
 	await connection.transport.close();
@@ -263,6 +279,7 @@ export async function disconnectServer(connection: MCPServerConnection): Promise
 
 /**
  * Check if a server supports tools.
+ * 检查服务器是否支持工具。
  */
 export function serverSupportsTools(capabilities: MCPServerCapabilities): boolean {
 	return capabilities.tools !== undefined;
@@ -270,6 +287,7 @@ export function serverSupportsTools(capabilities: MCPServerCapabilities): boolea
 
 /**
  * List resources from a connected server.
+ * 从已连接的服务器获取资源列表。
  */
 export async function listResources(
 	connection: MCPServerConnection,
@@ -303,6 +321,7 @@ export async function listResources(
 
 /**
  * List resource templates from a connected server.
+ * 从已连接的服务器获取资源模板列表。
  */
 export async function listResourceTemplates(
 	connection: MCPServerConnection,
@@ -340,6 +359,7 @@ export async function listResourceTemplates(
 
 /**
  * Read a resource from a connected server.
+ * 从已连接的服务器读取资源。
  */
 export async function readResource(
 	connection: MCPServerConnection,
@@ -356,6 +376,7 @@ export async function readResource(
 
 /**
  * Subscribe to resource update notifications.
+ * 订阅资源更新通知。
  */
 export async function subscribeToResources(
 	connection: MCPServerConnection,
@@ -382,6 +403,7 @@ export async function subscribeToResources(
 
 /**
  * Unsubscribe from resource update notifications.
+ * 取消订阅资源更新通知。
  */
 export async function unsubscribeFromResources(
 	connection: MCPServerConnection,
@@ -408,6 +430,7 @@ export async function unsubscribeFromResources(
 
 /**
  * Check if a server supports resource subscriptions.
+ * 检查服务器是否支持资源订阅。
  */
 export function serverSupportsResourceSubscriptions(capabilities: MCPServerCapabilities): boolean {
 	return capabilities.resources?.subscribe === true;
@@ -415,6 +438,7 @@ export function serverSupportsResourceSubscriptions(capabilities: MCPServerCapab
 
 /**
  * Check if a server supports resources.
+ * 检查服务器是否支持资源。
  */
 export function serverSupportsResources(capabilities: MCPServerCapabilities): boolean {
 	return capabilities.resources !== undefined;
@@ -422,6 +446,7 @@ export function serverSupportsResources(capabilities: MCPServerCapabilities): bo
 
 /**
  * List prompts from a connected server.
+ * 从已连接的服务器获取提示词列表。
  */
 export async function listPrompts(
 	connection: MCPServerConnection,
@@ -455,6 +480,7 @@ export async function listPrompts(
 
 /**
  * Get a specific prompt from a connected server.
+ * 从已连接的服务器获取特定提示词。
  */
 export async function getPrompt(
 	connection: MCPServerConnection,
@@ -476,7 +502,9 @@ export async function getPrompt(
 
 /**
  * Check if a server supports prompts.
+ * 检查服务器是否支持提示词。
  */
 export function serverSupportsPrompts(capabilities: MCPServerCapabilities): boolean {
 	return capabilities.prompts !== undefined;
 }
+

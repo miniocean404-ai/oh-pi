@@ -1,8 +1,11 @@
+
 /**
  * MCP Server Manager.
+ * MCP 服务器管理器。
  *
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
+ * 发现、连接和管理 MCP 服务器。处理工具加载和生命周期。
  */
 import * as path from "node:path";
 import * as url from "node:url";
@@ -45,20 +48,30 @@ import type {
 } from "./types";
 import { MCPNotificationMethods } from "./types";
 
+/** 工具加载结果 */
 type ToolLoadResult = {
+	/** 服务器连接 */
 	connection: MCPServerConnection;
+	/** 服务器工具定义列表 */
 	serverTools: MCPToolDefinition[];
 };
 
+/** 带状态追踪的 Promise 包装类型 */
 type TrackedPromise<T> = {
+	/** 原始 Promise */
 	promise: Promise<T>;
+	/** 当前状态 */
 	status: "pending" | "fulfilled" | "rejected";
+	/** 成功时的返回值 */
 	value?: T;
+	/** 失败时的错误原因 */
 	reason?: unknown;
 };
 
+/** 启动超时时间（毫秒） */
 const STARTUP_TIMEOUT_MS = 250;
 
+/** 追踪 Promise 的状态和结果 */
 function trackPromise<T>(promise: Promise<T>): TrackedPromise<T> {
 	const tracked: TrackedPromise<T> = { promise, status: "pending" };
 	promise.then(
@@ -74,12 +87,14 @@ function trackPromise<T>(promise: Promise<T>): TrackedPromise<T> {
 	return tracked;
 }
 
+/** 延迟指定毫秒数 */
 function delay(ms: number): Promise<void> {
 	return Bun.sleep(ms);
 }
 
 /**
  * Stable, total ordering on MCP tools by name.
+ * 按名称对 MCP 工具进行稳定的全序排序。
  *
  * Anthropic prompt caching keys on byte-identical tool definitions: any reorder
  * of the tools array invalidates the tools cache breakpoint and forces a full
@@ -87,12 +102,19 @@ function delay(ms: number): Promise<void> {
  * times, so the natural "insertion order" of `#tools` is non-deterministic.
  * Sorting after every mutation makes the array bytes independent of connection
  * sequence.
+ * Anthropic 提示词缓存基于字节一致的工具定义：工具数组的任何重排都会使缓存断点失效，
+ * 并在下次请求时强制完整的前缀重建。MCP 服务器在任意时间连接/重连，
+ * 因此 `#tools` 的自然"插入顺序"是不确定的。每次变更后排序使数组字节与连接顺序无关。
  */
 export function sortMCPToolsByName<T extends { name: string }>(tools: T[]): T[] {
 	tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 	return tools;
 }
 
+/**
+ * 解析订阅后续动作。
+ * 根据通知启用状态和 epoch 决定是回滚、忽略还是应用订阅。
+ */
 export function resolveSubscriptionPostAction(
 	notificationsEnabled: boolean,
 	currentEpoch: number,
@@ -103,70 +125,102 @@ export function resolveSubscriptionPostAction(
 	return "apply";
 }
 /** Result of loading MCP tools */
+/** MCP 工具加载结果 */
 export interface MCPLoadResult {
 	/** Loaded tools as CustomTool instances */
+	/** 加载的工具（CustomTool 实例列表） */
 	tools: CustomTool<TSchema, MCPToolDetails>[];
 	/** Connection errors by server name */
+	/** 按服务器名称索引的连接错误 */
 	errors: Map<string, string>;
 	/** Connected server names */
+	/** 已连接的服务器名称列表 */
 	connectedServers: string[];
 	/** Extracted Exa API keys from filtered MCP servers */
+	/** 从过滤的 MCP 服务器中提取的 Exa API 密钥 */
 	exaApiKeys: string[];
 }
 
 /** Options for discovering and connecting to MCP servers */
+/** MCP 服务器发现和连接选项 */
 export interface MCPDiscoverOptions {
 	/** Whether to load project-level config (default: true) */
+	/** 是否加载项目级配置（默认：true） */
 	enableProjectConfig?: boolean;
 	/** Whether to filter out Exa MCP servers (default: true) */
+	/** 是否过滤 Exa MCP 服务器（默认：true） */
 	filterExa?: boolean;
 	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
+	/** 当内置浏览器工具启用时是否过滤浏览器 MCP 服务器（默认：false） */
 	filterBrowser?: boolean;
 	/** Called when starting to connect to servers */
+	/** 开始连接服务器时的回调 */
 	onConnecting?: (serverNames: string[]) => void;
 }
 
 /**
  * MCP Server Manager.
+ * MCP 服务器管理器。
  *
  * Manages connections to MCP servers and provides tools to the agent.
+ * 管理与 MCP 服务器的连接，并为 Agent 提供工具。
  */
 export class MCPManager {
 	static #instance: MCPManager | undefined;
 
 	/** Process-global instance shared by internal URL protocol handlers and tools. */
+	/** 进程全局实例，供内部 URL 协议处理器和工具共享。 */
 	static instance(): MCPManager | undefined {
 		return MCPManager.#instance;
 	}
 
 	/** Install or clear the process-global instance. */
+	/** 设置或清除进程全局实例。 */
 	static setInstance(value: MCPManager | undefined): void {
 		MCPManager.#instance = value;
 	}
 
 	/** Reset the process-global instance. Test-only. */
+	/** 重置进程全局实例。仅用于测试。 */
 	static resetForTests(): void {
 		MCPManager.#instance = undefined;
 	}
 
+	/** 已建立的服务器连接 */
 	#connections = new Map<string, MCPServerConnection>();
+	/** 已加载的工具列表 */
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
+	/** 正在进行的连接 Promise */
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
+	/** 正在进行的工具加载 Promise */
 	#pendingToolLoads = new Map<string, Promise<ToolLoadResult>>();
+	/** 服务器来源元数据 */
 	#sources = new Map<string, SourceMeta>();
+	/** 认证存储 */
 	#authStorage: AuthStorage | null = null;
+	/** 服务器通知回调 */
 	#onNotification?: (serverName: string, method: string, params: unknown) => void;
+	/** 工具变更回调 */
 	#onToolsChanged?: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void;
+	/** 资源变更回调 */
 	#onResourcesChanged?: (serverName: string, uri: string) => void;
+	/** 提示词变更回调 */
 	#onPromptsChanged?: (serverName: string) => void;
+	/** 是否启用通知 */
 	#notificationsEnabled = false;
+	/** 通知 epoch（用于失效检测） */
 	#notificationsEpoch = 0;
+	/** 已订阅的资源（按服务器名称索引） */
 	#subscribedResources = new Map<string, Set<string>>();
+	/** 待处理的资源刷新 */
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
+	/** 待处理的重连 */
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
 	/** Preserved configs for reconnection after connection loss. */
+	/** 保留的配置，用于连接丢失后的重连。 */
 	#serverConfigs = new Map<string, MCPServerConfig>();
 	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
+	/** 单调递增的 epoch，在 disconnectAll 时递增以使过期的重连失效。 */
 	#epoch = 0;
 
 	constructor(
@@ -176,6 +230,7 @@ export class MCPManager {
 
 	/**
 	 * Set a callback to receive all server notifications.
+	 * 设置接收所有服务器通知的回调。
 	 */
 	setOnNotification(handler: (serverName: string, method: string, params: unknown) => void): void {
 		this.#onNotification = handler;
@@ -183,6 +238,7 @@ export class MCPManager {
 
 	/**
 	 * Set a callback to fire when any server's tools change.
+	 * 设置任意服务器工具变更时触发的回调。
 	 */
 	setOnToolsChanged(handler: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void): void {
 		this.#onToolsChanged = handler;
@@ -190,6 +246,7 @@ export class MCPManager {
 
 	/**
 	 * Set a callback to fire when any server's resources change.
+	 * 设置任意服务器资源变更时触发的回调。
 	 */
 	setOnResourcesChanged(handler: (serverName: string, uri: string) => void): void {
 		this.#onResourcesChanged = handler;
@@ -197,10 +254,11 @@ export class MCPManager {
 
 	/**
 	 * Set a callback to fire when any server's prompts change.
+	 * 设置任意服务器提示词变更时触发的回调。
 	 */
 	setOnPromptsChanged(handler: (serverName: string) => void): void {
 		this.#onPromptsChanged = handler;
-		// Fire immediately for servers that already have prompts loaded
+		// 对已加载提示词的服务器立即触发回调
 		for (const [name, connection] of this.#connections) {
 			if (connection.prompts?.length) {
 				handler(name);
@@ -208,6 +266,7 @@ export class MCPManager {
 		}
 	}
 
+	/** 订阅资源并追踪订阅状态 */
 	#subscribeAndTrack(name: string, connection: MCPServerConnection, uris: string[], notificationEpoch: number): void {
 		void subscribeToResources(connection, uris)
 			.then(() => {
@@ -235,6 +294,7 @@ export class MCPManager {
 			});
 	}
 
+	/** 设置是否启用通知。启用时订阅所有已连接服务器的资源，禁用时取消订阅。 */
 	setNotificationsEnabled(enabled: boolean): void {
 		const wasEnabled = this.#notificationsEnabled;
 		this.#notificationsEnabled = enabled;
@@ -244,7 +304,7 @@ export class MCPManager {
 		const notificationEpoch = this.#notificationsEpoch;
 
 		if (enabled) {
-			// Subscribe to all connected servers that support it
+			// 订阅所有支持资源订阅的已连接服务器
 			for (const [name, connection] of this.#connections) {
 				if (connection.capabilities.resources?.subscribe && connection.resources) {
 					const uris = connection.resources.map(r => r.uri);
@@ -254,7 +314,7 @@ export class MCPManager {
 			return;
 		}
 
-		// Unsubscribe from all servers
+		// 取消所有服务器的订阅
 		for (const [name, connection] of this.#connections) {
 			const uris = this.#subscribedResources.get(name);
 			if (uris && uris.size > 0) {
@@ -268,6 +328,7 @@ export class MCPManager {
 
 	/**
 	 * Set the auth storage for resolving OAuth credentials.
+	 * 设置用于解析 OAuth 凭据的认证存储。
 	 */
 	setAuthStorage(authStorage: AuthStorage): void {
 		this.#authStorage = authStorage;
@@ -276,6 +337,7 @@ export class MCPManager {
 	/**
 	 * Discover and connect to all MCP servers from .mcp.json files.
 	 * Returns tools and any connection errors.
+	 * 从 .mcp.json 文件中发现并连接所有 MCP 服务器。返回工具和连接错误。
 	 */
 	async discoverAndConnect(options?: MCPDiscoverOptions): Promise<MCPLoadResult> {
 		const { configs, exaApiKeys, sources } = await loadAllMCPConfigs(this.cwd, {
@@ -291,6 +353,7 @@ export class MCPManager {
 	/**
 	 * Connect to specific MCP servers.
 	 * Connections are made in parallel for faster startup.
+	 * 连接到指定的 MCP 服务器。并行建立连接以加快启动速度。
 	 */
 	async connectServers(
 		configs: Record<string, MCPServerConfig>,
@@ -310,7 +373,7 @@ export class MCPManager {
 		const reportedErrors = new Set<string>();
 		let allowBackgroundLogging = false;
 
-		// Prepare connection tasks
+		// 准备连接任务
 		const connectionTasks: ConnectionTask[] = [];
 
 		for (const [name, config] of Object.entries(configs)) {
@@ -322,7 +385,7 @@ export class MCPManager {
 				}
 			}
 
-			// Skip if already connected
+			// 跳过已连接的服务器
 			if (this.#connections.has(name)) {
 				connectedServers.add(name);
 				continue;
@@ -336,7 +399,7 @@ export class MCPManager {
 				continue;
 			}
 
-			// Validate config
+			// 验证配置
 			const validationErrors = validateServerConfig(name, config);
 			if (validationErrors.length > 0) {
 				errors.set(name, validationErrors.join("; "));
@@ -344,11 +407,10 @@ export class MCPManager {
 				continue;
 			}
 
-			// Save config early so reconnection works even if the initial connect times out
-			// and falls back to cached/deferred tools.
+			// 提前保存配置，即使初始连接超时回退到缓存/延迟工具，重连仍可工作
 			this.#serverConfigs.set(name, config);
 
-			// Resolve auth config before connecting, but do so per-server in parallel.
+			// 连接前解析认证配置，每个服务器并行处理
 			const connectionPromise = (async () => {
 				const resolvedConfig = await this.#resolveAuthConfig(config);
 				return connectToServer(name, resolvedConfig, {
@@ -361,8 +423,7 @@ export class MCPManager {
 				});
 			})().then(
 				connection => {
-					// Store original config (without resolved tokens) to keep
-					// cache keys stable and avoid leaking rotating credentials.
+					// 存储原始配置（不含已解析的令牌），保持缓存键稳定并避免泄露轮换凭据
 					connection.config = config;
 					this.#serverConfigs.set(name, config);
 					if (sources[name]) {
@@ -373,7 +434,7 @@ export class MCPManager {
 						this.#connections.set(name, connection);
 					}
 
-					// Wire auth refresh for HTTP transports so 401s trigger token refresh.
+					// 为 HTTP 传输注入认证刷新逻辑，使 401 错误触发令牌刷新
 					if (connection.transport instanceof HttpTransport && config.auth?.type === "oauth") {
 						connection.transport.onAuthError = async () => {
 							const refreshed = await this.#resolveAuthConfig(config, true);
@@ -384,8 +445,7 @@ export class MCPManager {
 						};
 					}
 
-					// Re-establish connection if the transport closes (server restart,
-					// network interruption).
+					// 传输关闭时重新建立连接（服务器重启、网络中断等场景）
 					connection.transport.onClose = () => {
 						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
 						void this.reconnectServer(name);
@@ -432,7 +492,7 @@ export class MCPManager {
 				});
 		}
 
-		// Notify about servers we're connecting to
+		// 通知正在连接的服务器
 		if (connectionTasks.length > 0 && onConnecting) {
 			onConnecting(connectionTasks.map(task => task.name));
 		}
@@ -491,11 +551,11 @@ export class MCPManager {
 			}
 		}
 
-		// Stable sort by name so the order is independent of connection completion.
-		// See `sortMCPToolsByName` for the cache-stability rationale.
+		// 按名称稳定排序，使顺序与连接完成顺序无关。
+		// 参见 `sortMCPToolsByName` 了解缓存稳定性的原因。
 		sortMCPToolsByName(allTools);
 
-		// Update cached tools
+		// 更新缓存的工具
 		this.#tools = allTools;
 		allowBackgroundLogging = true;
 
@@ -507,14 +567,16 @@ export class MCPManager {
 		};
 	}
 
+	/** 替换指定服务器的工具列表 */
 	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
 		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp__${name}_`));
 		this.#tools.push(...tools);
-		// Stable sort by name so reconnect order does not perturb the array.
-		// See `sortMCPToolsByName` for the cache-stability rationale.
+		// 按名称稳定排序，使重连顺序不影响数组。
+		// 参见 `sortMCPToolsByName` 了解缓存稳定性的原因。
 		sortMCPToolsByName(this.#tools);
 	}
 
+	/** 触发通知驱动的刷新（工具/资源/提示词） */
 	#triggerNotificationRefresh(serverName: string, kind: "tools" | "resources" | "prompts"): void {
 		const refresh = (() => {
 			switch (kind) {
@@ -530,6 +592,7 @@ export class MCPManager {
 			logger.debug("Failed MCP notification refresh", { path: `mcp:${serverName}`, kind, error });
 		});
 	}
+	/** 处理服务器通知消息 */
 	#handleServerNotification(serverName: string, method: string, params: unknown): void {
 		logger.debug("MCP notification received", { path: `mcp:${serverName}`, method });
 
@@ -559,6 +622,7 @@ export class MCPManager {
 	}
 
 	/** Handle server-to-client JSON-RPC requests (e.g. ping, roots/list). */
+	/** 处理服务器到客户端的 JSON-RPC 请求（如 ping、roots/list）。 */
 	async #handleServerRequest(method: string, _params: unknown): Promise<unknown> {
 		switch (method) {
 			case "ping":
@@ -570,6 +634,7 @@ export class MCPManager {
 		}
 	}
 
+	/** 获取项目根目录列表 */
 	#getRoots(): { roots: Array<{ uri: string; name: string }> } {
 		return {
 			roots: [
@@ -583,6 +648,7 @@ export class MCPManager {
 
 	/**
 	 * Get all loaded tools.
+	 * 获取所有已加载的工具。
 	 */
 	getTools(): CustomTool<TSchema, MCPToolDetails>[] {
 		return this.#tools;
@@ -590,6 +656,7 @@ export class MCPManager {
 
 	/**
 	 * Get a specific connection.
+	 * 获取指定名称的连接。
 	 */
 	getConnection(name: string): MCPServerConnection | undefined {
 		return this.#connections.get(name);
@@ -597,6 +664,7 @@ export class MCPManager {
 
 	/**
 	 * Get current connection status for a server.
+	 * 获取服务器的当前连接状态。
 	 */
 	getConnectionStatus(name: string): "connected" | "connecting" | "disconnected" {
 		if (this.#connections.has(name)) return "connected";
@@ -611,6 +679,7 @@ export class MCPManager {
 
 	/**
 	 * Get the source metadata for a server.
+	 * 获取服务器的来源元数据。
 	 */
 	getSource(name: string): SourceMeta | undefined {
 		return this.#sources.get(name) ?? this.#connections.get(name)?._source;
@@ -618,13 +687,14 @@ export class MCPManager {
 
 	/**
 	 * Wait for a connection to complete (or fail).
+	 * 等待连接完成（或失败）。
 	 */
 	async waitForConnection(name: string): Promise<MCPServerConnection> {
 		const connection = this.#connections.get(name);
 		if (connection) return connection;
 		const pending = this.#pendingConnections.get(name);
 		if (pending) return pending;
-		// If a reconnection is in flight, wait for it to complete
+		// 如果正在进行重连，等待其完成
 		const reconnecting = this.#pendingReconnections.get(name);
 		if (reconnecting) {
 			const result = await reconnecting;
@@ -635,6 +705,7 @@ export class MCPManager {
 
 	/**
 	 * Resolve auth and shell-command substitutions in config before connecting.
+	 * 连接前解析配置中的认证和 shell 命令替换。
 	 */
 	async prepareConfig(config: MCPServerConfig): Promise<MCPServerConfig> {
 		return this.#resolveAuthConfig(config);
@@ -642,6 +713,7 @@ export class MCPManager {
 
 	/**
 	 * Get all connected server names.
+	 * 获取所有已连接的服务器名称。
 	 */
 	getConnectedServers(): string[] {
 		return Array.from(this.#connections.keys());
@@ -649,6 +721,7 @@ export class MCPManager {
 
 	/**
 	 * Get all known server names (connected, connecting, or discovered).
+	 * 获取所有已知的服务器名称（已连接、连接中或已发现）。
 	 */
 	getAllServerNames(): string[] {
 		return Array.from(
@@ -658,6 +731,7 @@ export class MCPManager {
 
 	/**
 	 * Disconnect from a specific server.
+	 * 断开与指定服务器的连接。
 	 */
 	async disconnectServer(name: string): Promise<void> {
 		this.#pendingConnections.delete(name);
@@ -676,29 +750,30 @@ export class MCPManager {
 		this.#subscribedResources.delete(name);
 
 		if (connection) {
-			// Detach onClose to prevent spurious reconnect from close()
+			// 分离 onClose 以防止 close() 触发错误的重连
 			connection.transport.onClose = undefined;
 			await disconnectServer(connection);
 			this.#connections.delete(name);
 		}
 
-		// Remove tools from this server and notify consumers
+		// 移除该服务器的工具并通知消费者
 		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
 		this.#tools = this.#tools.filter(t => !t.name.startsWith(`mcp__${name}_`));
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
 
-		// Notify prompt consumers so stale commands are cleared
+		// 通知提示词消费者以清除过期的命令
 		if (connection?.prompts?.length) this.#onPromptsChanged?.(name);
 	}
 
 	/**
 	 * Disconnect from all servers.
+	 * 断开与所有服务器的连接。
 	 */
 	async disconnectAll(): Promise<void> {
-		// Invalidate any in-flight reconnection attempts that outlive this call.
-		// They captured the old epoch; after increment they'll detect staleness.
+		// 使所有正在进行的重连尝试失效。
+		// 它们捕获了旧的 epoch；递增后将检测到过期。
 		this.#epoch++;
-		// Detach onClose before closing to prevent spurious reconnect attempts
+		// 关闭前分离 onClose 以防止错误的重连尝试
 		for (const conn of this.#connections.values()) {
 			conn.transport.onClose = undefined;
 		}
@@ -722,6 +797,9 @@ export class MCPManager {
 	 * connection, reloads tools, and notifies consumers.
 	 * Concurrent calls for the same server share one reconnection attempt.
 	 * Returns the new connection, or null if reconnection failed.
+	 * 连接失败后重连服务器。拆除过期连接、重新解析认证、建立新连接、
+	 * 重新加载工具并通知消费者。同一服务器的并发调用共享一次重连尝试。
+	 * 返回新连接，若重连失败则返回 null。
 	 */
 	async reconnectServer(name: string): Promise<MCPServerConnection | null> {
 		const pending = this.#pendingReconnections.get(name);
@@ -732,6 +810,7 @@ export class MCPManager {
 		return attempt.finally(() => this.#pendingReconnections.delete(name));
 	}
 
+	/** 执行实际的重连逻辑，支持带退避的重试 */
 	async #doReconnect(name: string): Promise<MCPServerConnection | null> {
 		const oldConnection = this.#connections.get(name);
 		const config = oldConnection?.config ?? this.#serverConfigs.get(name);
@@ -740,14 +819,14 @@ export class MCPManager {
 
 		logger.debug("MCP reconnecting", { path: `mcp:${name}` });
 
-		// Close the old transport without removing tools or notifying consumers.
-		// Tools stay available (stale) while we establish the new connection.
-		// Fire-and-forget: don't await the close — HttpTransport.close() sends a
-		// DELETE with config.timeout (30s default), and blocking here delays the
-		// reconnect loop by that amount on every server restart.
+		// 关闭旧传输但不移除工具或通知消费者。
+		// 在建立新连接期间，工具保持可用（过期状态）。
+		// 即发即忘：不等待 close — HttpTransport.close() 发送
+		// 带 config.timeout（默认 30 秒）的 DELETE 请求，
+		// 阻塞等待会在每次服务器重启时延迟重连循环。
 		const reconnectEpoch = this.#epoch;
 		if (oldConnection) {
-			// Detach onClose to prevent re-entrant reconnect from the close itself
+			// 分离 onClose 以防止 close 自身触发重入式重连
 			oldConnection.transport.onClose = undefined;
 			void oldConnection.transport.close().catch(() => {});
 			this.#connections.delete(name);
@@ -755,7 +834,7 @@ export class MCPManager {
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
 
-		// Retry with backoff — the server may still be starting up.
+		// 带退避重试 — 服务器可能仍在启动中
 		const delays = [500, 1000, 2000, 4000];
 		for (let attempt = 0; attempt <= delays.length; attempt++) {
 			if (this.#epoch !== reconnectEpoch) {
@@ -790,10 +869,9 @@ export class MCPManager {
 					await Bun.sleep(delays[attempt]);
 				} else {
 					logger.error("MCP reconnect failed after retries", { path: `mcp:${name}`, error: msg });
-					// Don't remove stale tools — keep them in the registry so they
-					// remain selected. Calls will fail with MCP errors, which
-					// triggers the tool-level reconnect, or the user can run
-					// /mcp reconnect <name> manually.
+					// 不移除过期工具 — 保留在注册表中使其仍可被选中。
+					// 调用将失败并返回 MCP 错误，触发工具级重连，
+					// 或用户可手动运行 /mcp reconnect <name>。
 				}
 			}
 		}
@@ -801,6 +879,7 @@ export class MCPManager {
 	}
 
 	/** Establish a new connection to a server, wire handlers, load tools. */
+	/** 建立与服务器的新连接，注册处理器，加载工具。 */
 	async #connectAndWireServer(
 		name: string,
 		config: MCPServerConfig,
@@ -820,8 +899,7 @@ export class MCPManager {
 		connection.config = config;
 		if (source) connection._source = source;
 
-		// Bail out if the server was disconnected or the manager was reset
-		// while we were connecting (e.g. /mcp reload called disconnectAll).
+		// 如果在连接过程中服务器被断开或管理器被重置（如 /mcp reload 调用了 disconnectAll），则中止
 		if (!this.#serverConfigs.has(name) || this.#epoch !== reconnectEpoch) {
 			await connection.transport.close().catch(() => {});
 			throw new Error(`Server "${name}" was disconnected during reconnection`);
@@ -829,7 +907,7 @@ export class MCPManager {
 
 		this.#connections.set(name, connection);
 
-		// Wire auth refresh for HTTP transports, and reconnect for any transport.
+		// 为 HTTP 传输注入认证刷新逻辑，为任意传输注入重连逻辑
 		if (connection.transport instanceof HttpTransport && config.auth?.type === "oauth") {
 			connection.transport.onAuthError = async () => {
 				const refreshed = await this.#resolveAuthConfig(config, true);
@@ -853,7 +931,7 @@ export class MCPManager {
 			void this.#loadServerResourcesAndPrompts(name, connection);
 			return connection;
 		} catch (error) {
-			// Clean up the connection to avoid zombie transports
+			// 清理连接以避免僵尸传输
 			connection.transport.onClose = undefined;
 			await connection.transport.close().catch(() => {});
 			this.#connections.delete(name);
@@ -864,6 +942,7 @@ export class MCPManager {
 	/**
 	 * Best-effort loading of resources, resource subscriptions, and prompts.
 	 * Shared between initial connection and reconnection.
+	 * 尽力加载资源、资源订阅和提示词。初始连接和重连共享此逻辑。
 	 */
 	async #loadServerResourcesAndPrompts(name: string, connection: MCPServerConnection): Promise<void> {
 		if (serverSupportsResources(connection.capabilities)) {
@@ -892,27 +971,29 @@ export class MCPManager {
 
 	/**
 	 * Refresh tools from a specific server.
+	 * 刷新指定服务器的工具列表。
 	 */
 	async refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
 		if (!connection) return;
 
-		// Clear cached tools
+		// 清除缓存的工具
 		connection.tools = undefined;
 
-		// Reload tools
+		// 重新加载工具
 		const serverTools = await listTools(connection);
 		const reconnect = () => this.reconnectServer(name);
 		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 		void this.toolCache?.set(name, connection.config, serverTools);
 
-		// Replace tools from this server
+		// 替换该服务器的工具
 		this.#replaceServerTools(name, customTools);
 		this.#onToolsChanged?.(this.#tools);
 	}
 
 	/**
 	 * Refresh tools from all servers.
+	 * 刷新所有服务器的工具列表。
 	 */
 	async refreshAllTools(): Promise<void> {
 		const promises = Array.from(this.#connections.keys()).map(name => this.refreshServerTools(name));
@@ -921,6 +1002,7 @@ export class MCPManager {
 
 	/**
 	 * Refresh resources from a specific server.
+	 * 刷新指定服务器的资源列表。
 	 */
 	async refreshServerResources(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
@@ -930,18 +1012,18 @@ export class MCPManager {
 		if (existing && existing.connection === connection) return existing.promise;
 
 		const doRefresh = async (): Promise<void> => {
-			// Clear cached resources
+			// 清除缓存的资源
 			connection.resources = undefined;
 			connection.resourceTemplates = undefined;
 
-			// Reload
+			// 重新加载
 			const [resources] = await Promise.all([listResources(connection), listResourceTemplates(connection)]);
 			if (this.#notificationsEnabled && connection.capabilities.resources?.subscribe) {
 				const newUris = new Set(resources.map(r => r.uri));
 				const oldUris = this.#subscribedResources.get(name);
 				const notificationEpoch = this.#notificationsEpoch;
 
-				// Unsubscribe URIs that were removed
+				// 取消已移除的 URI 的订阅
 				if (oldUris) {
 					const removed = [...oldUris].filter(uri => !newUris.has(uri));
 					if (removed.length > 0) {
@@ -953,7 +1035,7 @@ export class MCPManager {
 					}
 				}
 
-				// Subscribe to the current set and update tracking atomically
+				// 订阅当前集合并原子地更新追踪
 				try {
 					const allUris = [...newUris];
 					await subscribeToResources(connection, allUris);
@@ -990,6 +1072,7 @@ export class MCPManager {
 
 	/**
 	 * Refresh prompts from a specific server.
+	 * 刷新指定服务器的提示词列表。
 	 */
 	async refreshServerPrompts(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
@@ -1003,6 +1086,7 @@ export class MCPManager {
 
 	/**
 	 * Get resources and templates for a specific server.
+	 * 获取指定服务器的资源和模板。
 	 */
 	getServerResources(name: string): { resources: MCPResource[]; templates: MCPResourceTemplate[] } | undefined {
 		const connection = this.#connections.get(name);
@@ -1015,6 +1099,7 @@ export class MCPManager {
 
 	/**
 	 * Read a specific resource from a server.
+	 * 从服务器读取指定资源。
 	 */
 	async readServerResource(
 		name: string,
@@ -1028,6 +1113,7 @@ export class MCPManager {
 
 	/**
 	 * Get prompts for a specific server.
+	 * 获取指定服务器的提示词列表。
 	 */
 	getServerPrompts(name: string): MCPPrompt[] | undefined {
 		const connection = this.#connections.get(name);
@@ -1037,6 +1123,7 @@ export class MCPManager {
 
 	/**
 	 * Get a specific prompt from a server.
+	 * 从服务器获取并执行指定提示词。
 	 */
 	async executePrompt(
 		name: string,
@@ -1051,6 +1138,7 @@ export class MCPManager {
 
 	/**
 	 * Get all server instructions (for system prompt injection).
+	 * 获取所有服务器指令（用于系统提示词注入）。
 	 */
 	getServerInstructions(): Map<string, string> {
 		const instructions = new Map<string, string>();
@@ -1064,6 +1152,7 @@ export class MCPManager {
 
 	/**
 	 * Get notification state for display.
+	 * 获取通知状态（用于显示）。
 	 */
 	getNotificationState(): { enabled: boolean; subscriptions: Map<string, ReadonlySet<string>> } {
 		return {
@@ -1074,6 +1163,7 @@ export class MCPManager {
 
 	/**
 	 * Resolve OAuth credentials and shell commands in config.
+	 * 解析配置中的 OAuth 凭据和 shell 命令。
 	 */
 	async #resolveAuthConfig(config: MCPServerConfig, forceRefresh = false): Promise<MCPServerConfig> {
 		let resolved: MCPServerConfig = { ...config };
@@ -1084,8 +1174,8 @@ export class MCPManager {
 			try {
 				let credential = this.#authStorage.get(credentialId);
 				if (credential?.type === "oauth") {
-					// Proactive refresh: 5-minute buffer before expiry
-					// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
+					// 主动刷新：过期前 5 分钟的缓冲期
+					// 强制刷新：在 401/403 认证错误时（令牌被撤销、时钟偏差、缺少过期时间）
 					const REFRESH_BUFFER_MS = 5 * 60_000;
 					const shouldRefresh =
 						forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
@@ -1158,6 +1248,7 @@ export class MCPManager {
 /**
  * Create an MCP manager and discover servers.
  * Convenience function for quick setup.
+ * 创建 MCP 管理器并发现服务器。快速设置的便捷函数。
  */
 export async function createMCPManager(
 	cwd: string,
@@ -1170,3 +1261,4 @@ export async function createMCPManager(
 	const result = await manager.discoverAndConnect(options);
 	return { manager, result };
 }
+

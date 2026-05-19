@@ -1,10 +1,13 @@
+
 /**
  * SwiftLint CLI-based linter client.
  * Parses SwiftLint's JSON reporter output into LSP Diagnostic format.
+ * 基于 SwiftLint CLI 的代码检查客户端，将 JSON reporter 输出解析为 LSP Diagnostic 格式。
  */
 import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../../lsp/types";
 
 /** Shape of a single violation from `swiftlint lint --reporter json`. */
+/** `swiftlint lint --reporter json` 输出的单条违规记录结构 */
 interface SwiftLintViolation {
 	character: number;
 	file: string;
@@ -15,6 +18,7 @@ interface SwiftLintViolation {
 	type: string;
 }
 
+/** 将 SwiftLint 严重级别转换为 LSP DiagnosticSeverity */
 function parseSeverity(severity: string): DiagnosticSeverity {
 	switch (severity) {
 		case "Error":
@@ -26,6 +30,7 @@ function parseSeverity(severity: string): DiagnosticSeverity {
 	}
 }
 
+/** 运行 SwiftLint CLI 命令 */
 async function runSwiftLint(
 	args: string[],
 	cwd: string,
@@ -44,7 +49,7 @@ async function runSwiftLint(
 		const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
 		await proc.exited;
 
-		// swiftlint exits non-zero when violations found — that's not a failure
+		// swiftlint 发现违规时以非零退出码退出——这不算失败
 		return { stdout, stderr, success: stdout.length > 0 };
 	} catch (err) {
 		return { stdout: "", stderr: String(err), success: false };
@@ -54,9 +59,11 @@ async function runSwiftLint(
 /**
  * SwiftLint CLI-based linter client.
  * Runs `swiftlint lint --reporter json` and converts violations to LSP diagnostics.
+ * 基于 SwiftLint CLI 的代码检查客户端，运行 `swiftlint lint --reporter json` 并转换为 LSP 诊断信息。
  */
 export class SwiftLintClient implements LinterClient {
 	/** Factory method for creating SwiftLintClient instances */
+	/** 创建 SwiftLintClient 实例的工厂方法 */
 	static create(config: ServerConfig, cwd: string): LinterClient {
 		return new SwiftLintClient(config, cwd);
 	}
@@ -66,11 +73,13 @@ export class SwiftLintClient implements LinterClient {
 		private readonly cwd: string,
 	) {}
 
+	/** 格式化文件内容（SwiftLint 不支持格式化） */
 	async format(_filePath: string, content: string): Promise<string> {
-		// SwiftLint doesn't support formatting
+		// SwiftLint 不支持格式化
 		return content;
 	}
 
+	/** 对文件进行代码检查 */
 	async lint(filePath: string): Promise<Diagnostic[]> {
 		const result = await runSwiftLint(
 			["lint", "--quiet", "--reporter", "json", filePath],
@@ -85,6 +94,7 @@ export class SwiftLintClient implements LinterClient {
 		return this.#parseJsonOutput(result.stdout);
 	}
 
+	/** 将 SwiftLint 的 JSON 输出解析为 LSP 诊断信息 */
 	#parseJsonOutput(jsonOutput: string): Diagnostic[] {
 		const diagnostics: Diagnostic[] = [];
 
@@ -92,7 +102,7 @@ export class SwiftLintClient implements LinterClient {
 			const violations: SwiftLintViolation[] = JSON.parse(jsonOutput);
 
 			for (const v of violations) {
-				// SwiftLint lines/characters are 1-based; LSP is 0-based
+				// SwiftLint 行号/列号从 1 开始；LSP 从 0 开始
 				const line = Math.max(0, v.line - 1);
 				const character = Math.max(0, v.character - 1);
 
@@ -114,7 +124,9 @@ export class SwiftLintClient implements LinterClient {
 		return diagnostics;
 	}
 
+	/** 释放资源（CLI 客户端无需释放） */
 	dispose(): void {
-		// Nothing to dispose for CLI client
+		// CLI 客户端无需释放资源
 	}
 }
+

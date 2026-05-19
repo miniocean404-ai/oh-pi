@@ -1,3 +1,9 @@
+
+/**
+ * Smithery 认证管理。
+ *
+ * 处理 Smithery API 密钥的创建、存储和管理。
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
@@ -6,35 +12,42 @@ import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 const SMITHERY_AUTH_FILENAME = "smithery.json";
 const SMITHERY_URL = process.env.SMITHERY_URL || "https://smithery.ai";
 
+/** Smithery CLI 认证会话 */
 type SmitheryCliAuthSession = {
 	sessionId: string;
 	authUrl: string;
 };
 
+/** Smithery CLI 轮询响应 */
 type SmitheryCliPollResponse = {
 	status: "pending" | "success" | "error";
 	apiKey?: string;
 	message?: string;
 };
 
+/** Smithery 认证载荷 */
 type SmitheryAuthPayload = {
 	apiKey?: string;
 };
 
+/** 获取 Smithery 认证文件路径 */
 function getSmitheryAuthPath(): string {
 	return path.join(getAgentDir(), SMITHERY_AUTH_FILENAME);
 }
 
+/** 规范化 API 密钥 */
 function normalizeApiKey(value: string | undefined): string | undefined {
 	if (!value) return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** 获取 Smithery 登录 URL */
 export function getSmitheryLoginUrl(): string {
 	return SMITHERY_URL;
 }
 
+/** 创建 Smithery CLI 认证会话 */
 export async function createSmitheryCliAuthSession(): Promise<SmitheryCliAuthSession> {
 	const response = await fetch(`${SMITHERY_URL}/api/auth/cli/session`, {
 		method: "POST",
@@ -45,6 +58,7 @@ export async function createSmitheryCliAuthSession(): Promise<SmitheryCliAuthSes
 	return (await response.json()) as SmitheryCliAuthSession;
 }
 
+/** 轮询 Smithery CLI 认证会话状态 */
 export async function pollSmitheryCliAuthSession(
 	sessionId: string,
 	signal?: AbortSignal,
@@ -61,6 +75,7 @@ export async function pollSmitheryCliAuthSession(
 	return (await response.json()) as SmitheryCliPollResponse;
 }
 
+/** 获取 Smithery API 密钥 */
 export async function getSmitheryApiKey(): Promise<string | undefined> {
 	const envKey = normalizeApiKey(process.env.SMITHERY_API_KEY);
 	if (envKey) return envKey;
@@ -76,6 +91,7 @@ export async function getSmitheryApiKey(): Promise<string | undefined> {
 	}
 }
 
+/** 保存 Smithery API 密钥 */
 export async function saveSmitheryApiKey(apiKey: string): Promise<void> {
 	const normalized = normalizeApiKey(apiKey);
 	if (!normalized) {
@@ -92,6 +108,7 @@ export async function saveSmitheryApiKey(apiKey: string): Promise<void> {
 	}
 }
 
+/** 清除 Smithery API 密钥 */
 export async function clearSmitheryApiKey(): Promise<boolean> {
 	const authPath = getSmitheryAuthPath();
 	try {
@@ -102,3 +119,4 @@ export async function clearSmitheryApiKey(): Promise<boolean> {
 		throw error;
 	}
 }
+

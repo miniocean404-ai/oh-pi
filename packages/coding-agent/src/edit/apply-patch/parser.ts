@@ -1,4 +1,13 @@
+
 /**
+ * Codex `apply_patch` 信封格式的解析器。
+ *
+ * 输入是完整的信封文本（可选 heredoc 包装）。输出是 `PatchInput` 记录列表，
+ * 每条记录可直接传递给 `../modes/patch.ts` 中的单文件 `applyPatch()`。
+ *
+ * 根据规范 §4.3 宽松模式：解析前会剥离整个信封周围的
+ * `<<EOF` / `<<'EOF'` / `<<"EOF"` heredoc 包装。
+ *
  * Parser for the Codex `apply_patch` envelope format.
  *
  *     *** Begin Patch
@@ -25,6 +34,7 @@
 import { ParseError } from "../diff";
 import type { PatchInput } from "../modes/patch";
 
+// 信封格式标记常量
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
 const ADD_FILE_MARKER = "*** Add File: ";
@@ -32,11 +42,14 @@ const DELETE_FILE_MARKER = "*** Delete File: ";
 const UPDATE_FILE_MARKER = "*** Update File: ";
 const MOVE_TO_MARKER = "*** Move to: ";
 
+/** 解析选项 */
 interface ParseApplyPatchOptions {
 	streaming?: boolean;
 }
 
 /**
+ * 将 Codex `*** Begin Patch` 信封解析为单文件补丁输入列表。
+ *
  * Parse a Codex `*** Begin Patch` envelope into a list of single-file
  * patch inputs.
  */
@@ -45,6 +58,9 @@ export function parseApplyPatch(patchText: string): PatchInput[] {
 }
 
 /**
+ * 用于 TUI 预览的尽力解析器。容忍缺失的信封标记和不完整的尾部块；
+ * 不要用它来应用编辑。
+ *
  * Best-effort parser for in-progress TUI previews. It tolerates missing
  * envelope markers and incomplete trailing hunks; do not use it to apply edits.
  */
@@ -52,11 +68,12 @@ export function parseApplyPatchStreaming(patchText: string): PatchInput[] {
 	return parseApplyPatchWithOptions(patchText, { streaming: true });
 }
 
+/** 带选项的补丁解析实现 */
 function parseApplyPatchWithOptions(patchText: string, options: ParseApplyPatchOptions): PatchInput[] {
 	const streaming = options.streaming === true;
 	let lines = patchText.trim().split("\n");
 
-	// Lenient heredoc strip: <<EOF / <<'EOF' / <<"EOF" ... EOF
+	// 宽松 heredoc 剥离：<<EOF / <<'EOF' / <<"EOF" ... EOF
 	if (lines.length >= 2) {
 		const first = lines[0];
 		const last = lines[lines.length - 1].trim();
@@ -77,11 +94,11 @@ function parseApplyPatchWithOptions(patchText: string, options: ParseApplyPatchO
 
 	const hunks: PatchInput[] = [];
 	let remaining = hasEndMarker ? lines.slice(1, lines.length - 1) : lines.slice(1);
-	// Line numbers are 1-based and include the `*** Begin Patch` line (= 1).
+	// 行号从 1 开始，包含 `*** Begin Patch` 行（= 1）
 	let lineNumber = 2;
 
 	while (remaining.length > 0) {
-		// Blank separator lines between hunks are ignored (spec §3.3).
+		// 块之间的空白分隔行被忽略（规范 §3.3）
 		if (remaining[0].trim() === "") {
 			remaining = remaining.slice(1);
 			lineNumber++;
@@ -131,9 +148,9 @@ function parseApplyPatchWithOptions(patchText: string, options: ParseApplyPatchO
 				lineNumber++;
 			}
 
-			// The body runs until the next file-op marker or end of input.
-			// `*** End of File` is a chunk-terminator and stays inside the body —
-			// the downstream unified-diff parser handles it.
+			// 正文持续到下一个文件操作标记或输入结束。
+			// `*** End of File` 是块终止符，留在正文内——
+			// 下游的统一差异解析器会处理它。
 			const diffLines: string[] = [];
 			while (remaining.length > 0) {
 				const line = remaining[0];
@@ -172,3 +189,4 @@ function parseApplyPatchWithOptions(patchText: string, options: ParseApplyPatchO
 
 	return hunks;
 }
+

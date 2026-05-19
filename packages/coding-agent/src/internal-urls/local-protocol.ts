@@ -1,3 +1,8 @@
+
+/**
+ * local:// 协议处理器：会话级临时空间，用于存放大体量中间数据、
+ * 子 Agent 交接产物以及可复用的规划性 artifact。
+ */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +12,9 @@ import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
+/**
+ * local:// 协议的可注入选项：用于决定 artifacts 目录与会话 ID 来源。
+ */
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
 	getSessionId?: () => string | null;
@@ -108,6 +116,10 @@ function extractRelativePath(url: InternalUrl): string {
 	return decoded;
 }
 
+/**
+ * 解析 local:// 协议的根目录：优先使用 artifacts 目录下的 `local` 子目录，
+ * 否则回退到 `os.tmpdir()/omp-local/<safeSessionId>`。
+ */
 export function resolveLocalRoot(options: LocalProtocolOptions): string {
 	const artifactsDir = options.getArtifactsDir?.();
 	if (artifactsDir) {
@@ -119,6 +131,9 @@ export function resolveLocalRoot(options: LocalProtocolOptions): string {
 	return path.join(os.tmpdir(), "omp-local", safeSessionId);
 }
 
+/**
+ * 将 local:// URL 解析为绝对文件路径，并校验其位于 local 根目录之内。
+ */
 export function resolveLocalUrlToPath(input: string | InternalUrl, options: LocalProtocolOptions): string {
 	const url = typeof input === "string" ? parseLocalUrl(input) : input;
 	const localRoot = path.resolve(resolveLocalRoot(options));
@@ -139,6 +154,11 @@ export function resolveLocalUrlToPath(input: string | InternalUrl, options: Loca
  * URL forms:
  * - local:// - Lists files at the session local root
  * - local://<path> - Reads a file under the session local root
+ *
+ * local:// URL 协议处理器。
+ * URL 形式：
+ * - local://         列出会话 local 根目录下的所有文件
+ * - local://<path>   读取会话 local 根目录下的指定文件
  */
 export class LocalProtocolHandler implements ProtocolHandler {
 	readonly scheme = "local";
@@ -150,12 +170,17 @@ export class LocalProtocolHandler implements ProtocolHandler {
 	 * Install a process-global override that wins over the AgentRegistry-based
 	 * derivation. Used by SDK consumers that wire `localProtocolOptions` on
 	 * `createAgentSession` and by subagents that share their parent's root.
+	 *
+	 * 安装一个进程级全局覆盖项，其优先级高于基于 AgentRegistry 的推导。
+	 * 由在 `createAgentSession` 上配置 `localProtocolOptions` 的 SDK 调用方
+	 * 以及共享父级根目录的子 Agent 使用。
 	 */
 	static setOverride(value: LocalProtocolOptions | undefined): void {
 		LocalProtocolHandler.#override = value;
 	}
 
-	/** Reset the process-global override. Test-only. */
+	/** Reset the process-global override. Test-only.
+	 *  重置进程级全局覆盖项（仅测试使用）。 */
 	static resetOverrideForTests(): void {
 		LocalProtocolHandler.#override = undefined;
 	}
@@ -169,6 +194,13 @@ export class LocalProtocolHandler implements ProtocolHandler {
 	 *    artifacts/session id mapping).
 	 * 2. The main session in `AgentRegistry.global()`. Its `SessionManager`
 	 *    supplies both `getArtifactsDir` and `getSessionId`.
+	 *
+	 * 返回当前活跃的 local 协议选项。
+	 * 解析顺序：
+	 *   1. 通过 {@link setOverride} 安装的显式覆盖项（用于共享父级根目录的子 Agent
+	 *      以及拥有自定义 artifacts/session id 映射的 SDK 调用方）
+	 *   2. `AgentRegistry.global()` 中的主会话，其 `SessionManager` 同时提供
+	 *      `getArtifactsDir` 与 `getSessionId`。
 	 */
 	static resolveOptions(): LocalProtocolOptions | undefined {
 		const override = LocalProtocolHandler.#override;
@@ -247,3 +279,4 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

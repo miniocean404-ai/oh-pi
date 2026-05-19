@@ -1,3 +1,4 @@
+
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,23 +11,28 @@ import { SwiftLintClient } from "./clients/swiftlint-client";
 import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { ServerConfig } from "./types";
 
+/** LSP 配置（包含服务器列表和空闲超时） */
 export interface LspConfig {
 	servers: Record<string, ServerConfig>;
 	/** Idle timeout in milliseconds. If set, LSP clients will be shutdown after this period of inactivity. Disabled by default. */
+	/** 空闲超时（毫秒）。设置后，LSP 客户端在此时间段无活动后将被关闭。默认禁用。 */
 	idleTimeoutMs?: number;
 }
 
 // =============================================================================
-// Default Server Configuration Loading
+// 默认服务器配置加载
 // =============================================================================
 
+/** 进程 ID 占位符，在运行时替换为实际 PID */
 const PID_TOKEN = "$PID";
 
+/** 标准化后的配置结构 */
 interface NormalizedConfig {
 	servers: Record<string, Partial<ServerConfig>>;
 	idleTimeoutMs?: number;
 }
 
+/** 根据文件扩展名解析配置内容（支持 JSON 和 YAML） */
 function parseConfigContent(content: string, filePath: string): unknown {
 	const extension = path.extname(filePath).toLowerCase();
 	if (extension === ".yaml" || extension === ".yml") {
@@ -35,6 +41,7 @@ function parseConfigContent(content: string, filePath: string): unknown {
 	return JSON.parse(content) as unknown;
 }
 
+/** 标准化配置对象，提取 servers 和 idleTimeoutMs */
 function normalizeConfig(value: unknown): NormalizedConfig | null {
 	if (!isRecord(value)) return null;
 
@@ -53,12 +60,14 @@ function normalizeConfig(value: unknown): NormalizedConfig | null {
 	return { servers, idleTimeoutMs };
 }
 
+/** 标准化字符串数组，过滤空值 */
 function normalizeStringArray(value: unknown): string[] | null {
 	if (!Array.isArray(value)) return null;
 	const items = value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 	return items.length > 0 ? items : null;
 }
 
+/** 标准化单个服务器配置，验证必需字段 */
 function normalizeServerConfig(name: string, config: Partial<ServerConfig>): ServerConfig | null {
 	const command = typeof config.command === "string" && config.command.length > 0 ? config.command : null;
 	const fileTypes = normalizeStringArray(config.fileTypes);
@@ -82,6 +91,7 @@ function normalizeServerConfig(name: string, config: Partial<ServerConfig>): Ser
 	};
 }
 
+/** 读取并解析配置文件 */
 function readConfigFile(filePath: string): NormalizedConfig | null {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
@@ -92,6 +102,7 @@ function readConfigFile(filePath: string): NormalizedConfig | null {
 	}
 }
 
+/** 将部分服务器配置强制转换为完整配置 */
 function coerceServerConfigs(servers: Record<string, Partial<ServerConfig>>): Record<string, ServerConfig> {
 	const result: Record<string, ServerConfig> = {};
 	for (const [name, config] of Object.entries(servers)) {
@@ -103,6 +114,7 @@ function coerceServerConfigs(servers: Record<string, Partial<ServerConfig>>): Re
 	return result;
 }
 
+/** 合并基础配置和覆盖配置 */
 function mergeServers(
 	base: Record<string, ServerConfig>,
 	overrides: Record<string, Partial<ServerConfig>>,
@@ -127,6 +139,7 @@ function mergeServers(
 	return merged;
 }
 
+/** 应用运行时默认值（如 Biome/SwiftLint 客户端工厂、OmniSharp PID 替换） */
 function applyRuntimeDefaults(servers: Record<string, ServerConfig>): Record<string, ServerConfig> {
 	const updated: Record<string, ServerConfig> = { ...servers };
 
@@ -147,18 +160,18 @@ function applyRuntimeDefaults(servers: Record<string, ServerConfig>): Record<str
 }
 
 // =============================================================================
-// Configuration Loading
+// 配置加载
 // =============================================================================
 
 /**
  * Check if any root marker file exists in the directory
+ * 检查目录中是否存在任意根标记文件
  */
 export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 	let entries: string[] | null = null;
 	for (const marker of markers) {
-		// Handle glob-like patterns (e.g., "*.cabal"). Root markers live at the
-		// project root, so a one-level readdir is sufficient — and avoids
-		// Bun.Glob descending into node_modules for patterns like "**/*.cabal".
+		// 处理类 glob 模式（如 "*.cabal"）。根标记位于项目根目录，
+		// 因此单层 readdir 即可，避免 Bun.Glob 递归进入 node_modules
 		if (marker.includes("*")) {
 			if (entries === null) {
 				try {
@@ -185,12 +198,13 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 }
 
 // =============================================================================
-// Local Binary Resolution
+// 本地二进制文件解析
 // =============================================================================
 
 /**
  * Local bin directories to check before $PATH, ordered by priority.
  * Each entry maps a root marker to the bin directory to check.
+ * 优先于 $PATH 检查的本地 bin 目录，按优先级排列。
  */
 const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
 	// Node.js - check node_modules/.bin/
@@ -206,13 +220,15 @@ const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
 	{ markers: ["go.mod", "go.sum"], binDir: "bin" },
 ];
 
+/** Windows 平台本地可执行文件扩展名 */
 const WINDOWS_LOCAL_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
 
+/** 解析本地命令路径，支持 Windows 扩展名 */
 function resolveLocalCommand(basePath: string): string | null {
 	if (fs.existsSync(basePath)) return basePath;
 	if (process.platform !== "win32") return null;
 
-	// Package managers write Windows launchers with executable suffixes in node_modules/.bin.
+	// 包管理器在 node_modules/.bin 中写入带可执行后缀的 Windows 启动器
 	for (const extension of WINDOWS_LOCAL_EXECUTABLE_EXTENSIONS) {
 		const candidate = `${basePath}${extension}`;
 		if (fs.existsSync(candidate)) return candidate;
@@ -230,7 +246,7 @@ function resolveLocalCommand(basePath: string): string | null {
  * @returns Absolute path to the executable, or null if not found
  */
 export function resolveCommand(command: string, cwd: string): string | null {
-	// Check local bin directories based on project markers
+	// 根据项目标记检查本地 bin 目录
 	for (const { markers, binDir } of LOCAL_BIN_PATHS) {
 		if (hasRootMarkers(cwd, markers)) {
 			const localPath = path.join(cwd, binDir, command);
@@ -241,7 +257,7 @@ export function resolveCommand(command: string, cwd: string): string | null {
 		}
 	}
 
-	// Fall back to $PATH
+	// 回退到 $PATH 查找
 	return $which(command);
 }
 
@@ -376,12 +392,13 @@ export function loadConfig(cwd: string): LspConfig {
 }
 
 // =============================================================================
-// Server Selection
+// 服务器选择
 // =============================================================================
 
 /**
  * Find all servers that can handle a file based on extension.
  * Returns servers sorted with primary (non-linter) servers first.
+ * 根据文件扩展名查找所有可处理该文件的服务器，主服务器（非检查器）优先排列。
  */
 export function getServersForFile(config: LspConfig, filePath: string): Array<[string, ServerConfig]> {
 	const ext = path.extname(filePath).toLowerCase();
@@ -399,7 +416,7 @@ export function getServersForFile(config: LspConfig, filePath: string): Array<[s
 		}
 	}
 
-	// Sort: primary servers (non-linters) first, then linters
+	// 排序：主服务器（非检查器）优先，检查器在后
 	return matches.sort((a, b) => {
 		const aIsLinter = a[1].isLinter ? 1 : 0;
 		const bIsLinter = b[1].isLinter ? 1 : 0;
@@ -410,6 +427,7 @@ export function getServersForFile(config: LspConfig, filePath: string): Array<[s
 /**
  * Find the primary server for a file (prefers type-checkers over linters).
  * Used for operations like definition, hover, references that need type intelligence.
+ * 查找文件的主服务器（优先选择类型检查器），用于需要类型推导的操作。
  */
 export function getServerForFile(config: LspConfig, filePath: string): [string, ServerConfig] | null {
 	const servers = getServersForFile(config, filePath);
@@ -418,6 +436,7 @@ export function getServerForFile(config: LspConfig, filePath: string): [string, 
 
 /**
  * Check if a server has a specific capability
+ * 检查服务器是否具有特定能力
  */
 export function hasCapability(
 	config: ServerConfig,
@@ -425,3 +444,4 @@ export function hasCapability(
 ): boolean {
 	return config.capabilities?.[capability] === true;
 }
+

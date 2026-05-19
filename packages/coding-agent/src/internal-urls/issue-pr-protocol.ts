@@ -1,3 +1,4 @@
+
 /**
  * Protocol handlers for `issue://` and `pr://`.
  *
@@ -16,6 +17,18 @@
  * - `issue://owner/repo/123?comments=0` — single item, comments suppressed.
  * - `issue://owner/repo?state=closed&limit=20` — list options pass through to
  *   `gh`.
+ *
+ * `issue://` 与 `pr://` 协议处理器。
+ * 单条读取均经由 SQLite 支持的 `github-cache`，在多个会话之间共享渲染后的 markdown。
+ * 根路径和仓库范围的读取（`issue://`、`pr://owner/repo`）会实时调用
+ * `gh issue list` / `gh pr list` 用于浏览。
+ * URL 形式：
+ * - `issue://` / `pr://`                                   列出当前默认仓库的近期条目
+ * - `issue://owner/repo` / `pr://owner/repo`               列出指定仓库的近期条目
+ * - `issue://123` / `pr://123`                             单条；仓库从调用方会话 cwd 推导（通过 `ResolveContext`）
+ * - `issue://owner/repo/123` / `pr://owner/repo/123`       完全限定的单条
+ * - `issue://owner/repo/123?comments=0`                    单条，禁用评论
+ * - `issue://owner/repo?state=closed&limit=20`             列表参数透传给 `gh`
  */
 import type { Settings } from "../config/settings";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -209,6 +222,15 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
  * The earlier-fallback drives `gh repo view` and any `gh issue list` /
  * `gh pr list` for short-form URLs, so getting this right is what keeps
  * reads of `issue://N` from picking the wrong repo across concurrent sessions.
+ *
+ * 解析协议应使用的工作目录。
+ * 优先级：
+ *   1. 调用方传入的 `context.cwd`（发起 `read` 的会话）
+ *   2. 通过 `AgentRegistry` 注册的第一个会话（单会话回退）
+ *   3. `process.cwd()`（最终回退）
+ * 这一回退顺序会影响 `gh repo view` 以及短形式 URL 对应的
+ * `gh issue list` / `gh pr list` 调用，正确处理才能避免并发会话下
+ * `issue://N` 误读到错误的仓库。
  */
 function resolveCwd(context: ResolveContext | undefined): string {
 	if (context?.cwd) return context.cwd;
@@ -464,6 +486,8 @@ async function fetchAndRenderPrDiff(
 
 /**
  * Handler for `issue://` URLs.
+ *
+ * `issue://` URL 协议处理器。
  */
 export class IssueProtocolHandler implements ProtocolHandler {
 	readonly scheme = "issue";
@@ -513,6 +537,8 @@ export class IssueProtocolHandler implements ProtocolHandler {
 
 /**
  * Handler for `pr://` URLs.
+ *
+ * `pr://` URL 协议处理器。
  */
 export class PrProtocolHandler implements ProtocolHandler {
 	readonly scheme = "pr";
@@ -575,3 +601,4 @@ export class PrProtocolHandler implements ProtocolHandler {
 		}
 	}
 }
+

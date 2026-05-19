@@ -1,4 +1,7 @@
+
 /**
+ * 编辑工具渲染器和 LSP 批处理辅助函数。
+ *
  * Edit tool renderer and LSP batching helpers.
  */
 
@@ -34,15 +37,16 @@ import type { Operation } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LSP Batching
+// LSP 批处理
 // ═══════════════════════════════════════════════════════════════════════════
 
 export { getLspBatchRequest, type LspBatchRequest };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Tool Details Types
+// 工具详情类型
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 每个文件的编辑结果 */
 export interface EditToolPerFileResult {
 	path: string;
 	diff: string;
@@ -52,43 +56,57 @@ export interface EditToolPerFileResult {
 	move?: string;
 	isError?: boolean;
 	errorText?: string;
-	/** TUI-friendly error text. When present, rendered to the user instead of `errorText`.
-	 * Set when the underlying error carries a `displayMessage` (e.g. {@link HashlineMismatchError}). */
+	/** TUI 友好的错误文本。存在时替代 `errorText` 渲染给用户。
+	 * 当底层错误携带 `displayMessage` 时设置（如 {@link HashlineMismatchError}）。 */
 	displayErrorText?: string;
 	meta?: OutputMeta;
+	/** 编辑前的原始内容；创建操作时为 `undefined` */
 	/** Source-of-truth content before the edit; `undefined` for create operations. */
 	oldText?: string;
+	/** 编辑后的内容；删除操作时为 `undefined` */
 	/** Source-of-truth content after the edit; `undefined` for delete operations. */
 	newText?: string;
 }
 
+/** 编辑工具详情 */
 export interface EditToolDetails {
+	/** 变更的统一差异 */
 	/** Unified diff of the changes made */
 	diff: string;
+	/** 新文件中首个变更的行号（用于编辑器导航） */
 	/** Line number of the first change in the new file (for editor navigation) */
 	firstChangedLine?: number;
+	/** 诊断结果（如可用） */
 	/** Diagnostic result (if available) */
 	diagnostics?: FileDiagnosticsResult;
+	/** 操作类型（仅补丁模式） */
 	/** Operation type (patch mode only) */
 	op?: Operation;
+	/** 移动/重命名后的新路径（仅补丁模式） */
 	/** New path after move/rename (patch mode only) */
 	move?: string;
+	/** 结构化输出元数据 */
 	/** Structured output metadata */
 	meta?: OutputMeta;
+	/** 每个文件的结果（多文件编辑） */
 	/** Per-file results (multi-file edits) */
 	perFileResults?: EditToolPerFileResult[];
+	/** 单文件编辑结果的绝对路径。ACP diff 元数据消费者需要此字段 */
 	/** Absolute file path for single-file edit results. Required by ACP diff metadata consumers. */
 	path?: string;
+	/** 编辑前的原始内容；创建操作时为 `undefined` */
 	/** Source-of-truth content before the edit; `undefined` for create operations. */
 	oldText?: string;
+	/** 编辑后的内容；删除操作时为 `undefined` */
 	/** Source-of-truth content after the edit; `undefined` for delete operations. */
 	newText?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TUI Renderer
+// TUI 渲染器
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 编辑渲染参数 */
 interface EditRenderArgs {
 	path?: string;
 	file_path?: string;
@@ -102,7 +120,7 @@ interface EditRenderArgs {
 	rename?: string;
 	diff?: string;
 	/**
-	 * Computed preview diff (used when tool args don't include a diff, e.g. hashline mode).
+	 * 计算的预览差异（当工具参数不包含 diff 时使用，如 hashline 模式）
 	 */
 	previewDiff?: string;
 	__partialJson?: string;
@@ -126,6 +144,7 @@ interface ApplyPatchRenderSummary {
 	error?: string;
 }
 
+/** 判断是否为 Vim 渲染参数 */
 function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
 	return (
 		typeof args === "object" &&
@@ -137,6 +156,7 @@ function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRende
 	);
 }
 
+/** 判断是否为 Vim 工具详情 */
 function isVimToolDetails(details: unknown): details is VimToolDetails {
 	if (!details || typeof details !== "object" || Array.isArray(details)) {
 		return false;
@@ -151,16 +171,22 @@ function isVimToolDetails(details: unknown): details is VimToolDetails {
 	);
 }
 
+/** 编辑工具渲染的扩展上下文 */
 /** Extended context for edit tool rendering */
 export interface EditRenderContext {
+	/** 调用方解析的编辑模式；让渲染器无需通过参数形状探测来分发 */
 	/** Edit mode resolved by the caller; lets the renderer dispatch without shape-sniffing */
 	editMode?: EditMode;
+	/** 预计算的差异预览（在工具执行前计算） */
 	/** Pre-computed diff preview (computed before tool executes) */
 	editDiffPreview?: DiffResult | DiffError;
+	/** 多文件流式差异预览（跨多文件的编辑） */
 	/** Multi-file streaming diff preview (edits spanning several files) */
 	perFileDiffPreview?: PerFileDiffPreview[];
+	/** 计算差异预览不可用时显示的原始编辑文本 */
 	/** Raw in-flight edit text shown while a computed diff preview is unavailable */
 	editStreamingFallback?: string;
+	/** 使用语法高亮渲染差异文本的函数 */
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -169,11 +195,12 @@ const EDIT_STREAMING_PREVIEW_LINES = 12;
 const CALL_TEXT_PREVIEW_LINES = 6;
 const CALL_TEXT_PREVIEW_WIDTH = 80;
 
-/** Extract file path from an edit entry. */
+/** 从编辑条目中提取文件路径 */
 function filePathFromEditEntry(p: string | undefined): string | undefined {
 	return p ?? undefined;
 }
 
+/** 解码部分 JSON 字符串片段（处理不完整的转义序列） */
 function decodePartialJsonStringFragment(fragment: string): string {
 	// Trim a trailing partial escape so JSON.parse sees a well-formed string.
 	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
@@ -182,12 +209,12 @@ function decodePartialJsonStringFragment(fragment: string): string {
 	try {
 		return JSON.parse(`"${text}"`) as string;
 	} catch {
-		// Streaming fragment isn't a valid JSON string yet; surface it raw rather
-		// than ad-hoc unescaping that mishandles surrogates and partial escapes.
+		// 流式片段还不是有效的 JSON 字符串；原样显示而非使用临时反转义
 		return text;
 	}
 }
 
+/** 从部分 JSON 中提取指定键的字符串值 */
 function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
 	if (!partialJson) return undefined;
 	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
@@ -196,24 +223,28 @@ function extractPartialJsonString(partialJson: string | undefined, key: string):
 	return decodePartialJsonStringFragment(match[1]);
 }
 
+/** 从部分 JSON 参数中获取编辑路径 */
 function getPartialJsonEditPath(args: EditRenderArgs): string | undefined {
 	return filePathFromEditEntry(extractPartialJsonString(args.__partialJson, "path"));
 }
 
-/** Count distinct file paths in an edits array. */
+/** 统计编辑数组中不同文件路径的数量 */
 function countEditFiles(edits: EditRenderEntry[]): number {
 	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
+/** 计算文本行数 */
 function countLines(text: string): number {
 	if (!text) return 0;
 	return text.split("\n").length;
 }
 
+/** 获取操作类型的显示标题 */
 function getOperationTitle(op: Operation | undefined): string {
 	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 }
 
+/** 格式化编辑路径的显示文本（含行号和重命名信息） */
 function formatEditPathDisplay(
 	rawPath: string,
 	uiTheme: Theme,
@@ -232,6 +263,7 @@ function formatEditPathDisplay(
 	return pathDisplay;
 }
 
+/** 格式化编辑描述（含语言图标和路径） */
 function formatEditDescription(
 	rawPath: string,
 	uiTheme: Theme,
@@ -245,6 +277,7 @@ function formatEditDescription(
 	};
 }
 
+/** 渲染纯文本预览（截断到指定行数） */
 function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string): string {
 	const previewLines = sanitizeText(text).split("\n");
 	let preview = "\n\n";
@@ -257,6 +290,7 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 	return preview.trimEnd();
 }
 
+/** 格式化流式差异预览（显示最后几行） */
 function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
 	if (!diff) return "";
 	const lines = diff.split("\n");
@@ -273,6 +307,7 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 	return text;
 }
 
+/** 格式化元数据行（行数和语言图标） */
 function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
 	const icon = uiTheme.getLangIcon(language);
 	if (lineCount !== null) {
@@ -281,6 +316,7 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 	return uiTheme.fg("dim", `${icon}`);
 }
 
+/** 格式化多文件流式差异预览 */
 function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme): string {
 	const parts: string[] = [];
 	for (const preview of previews) {
@@ -297,6 +333,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 	return parts.join("");
 }
 
+/** 获取工具调用时的预览内容 */
 function getCallPreview(
 	args: EditRenderArgs,
 	rawPath: string,
@@ -328,6 +365,7 @@ function getCallPreview(
 const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
 const HL_INPUT_HEADER_PREFIX = "@";
 
+/** 标准化 hashline 输入预览路径（去除引号） */
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
 	if (trimmed.length < 2) return trimmed;
@@ -339,6 +377,7 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	return trimmed;
 }
 
+/** 解析 hashline 输入预览头部行，提取路径 */
 function parseHashlineInputPreviewHeader(line: string): string | null {
 	if (!line.startsWith(HL_INPUT_HEADER_PREFIX)) return null;
 	// The real parser (`parseHashlineHeaderLine` in `hashline/input.ts`) strips
@@ -352,8 +391,9 @@ function parseHashlineInputPreviewHeader(line: string): string | null {
 	return previewPath.length > 0 ? previewPath : null;
 }
 
+/** 从 hashline 输入中提取所有文件路径 */
 function getHashlineInputPaths(input: string): string[] {
-	const stripped = input.startsWith("\uFEFF") ? input.slice(1) : input;
+	const stripped = input.startsWith("﻿") ? input.slice(1) : input;
 	const paths: string[] = [];
 	for (const rawLine of stripped.split("\n")) {
 		const line = rawLine.replace(/\r$/, "");
@@ -363,6 +403,7 @@ function getHashlineInputPaths(input: string): string[] {
 	return paths;
 }
 
+/** 获取 hashline 输入的渲染摘要 */
 function getHashlineInputRenderSummary(
 	args: EditRenderArgs,
 	editMode: EditMode | undefined,
@@ -373,6 +414,7 @@ function getHashlineInputRenderSummary(
 	return { entries: getHashlineInputPaths(args.input).map(path => ({ path })) };
 }
 
+/** 获取 apply_patch 的渲染摘要 */
 function getApplyPatchRenderSummary(
 	args: EditRenderArgs,
 	isPartial: boolean,
@@ -397,6 +439,7 @@ function getApplyPatchRenderSummary(
 	}
 }
 
+/** 渲染差异区域（含统计信息和折叠/展开支持） */
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -431,6 +474,7 @@ function renderDiffSection(
 	return text;
 }
 
+/** 自动换行编辑渲染器行（保留差异前缀格式） */
 function wrapEditRendererLine(line: string, width: number): string[] {
 	if (width <= 0) return [line];
 	if (line.length === 0) return [""];
@@ -456,6 +500,7 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 	);
 }
 
+/** 编辑工具的 TUI 渲染器，支持调用预览和结果渲染 */
 export const editToolRenderer = {
 	mergeCallAndResult: true,
 
@@ -531,6 +576,7 @@ export const editToolRenderer = {
 	},
 };
 
+/** 渲染单文件编辑结果 */
 function renderSingleFileResult(
 	result: {
 		content: Array<{ type: string; text?: string }>;
@@ -625,6 +671,7 @@ function renderSingleFileResult(
 	};
 }
 
+/** 渲染多文件编辑结果 */
 function renderMultiFileResult(
 	perFileResults: EditToolPerFileResult[],
 	totalFiles: number,
@@ -651,7 +698,7 @@ function renderMultiFileResult(
 				allLines.push(...fileComponents[i].render(width));
 			}
 
-			// Show pending indicator for files still being processed
+			// 显示仍在处理的文件的待处理指示器
 			if (remaining > 0) {
 				if (allLines.length > 0) allLines.push("");
 				const spinnerFrame = options.spinnerFrame;
@@ -681,3 +728,4 @@ function renderMultiFileResult(
 		},
 	};
 }
+

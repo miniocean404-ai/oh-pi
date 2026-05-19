@@ -1,7 +1,10 @@
+
 /**
  * MCP to CustomTool bridge.
+ * MCP 到 CustomTool 的桥接层。
  *
  * Converts MCP tool definitions to CustomTool format for the agent.
+ * 将 MCP 工具定义转换为 Agent 使用的 CustomTool 格式。
  */
 import type { AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { TSchema } from "@oh-my-pi/pi-ai";
@@ -21,12 +24,16 @@ import { renderMCPCall, renderMCPResult } from "./render";
 import type { MCPContent, MCPServerConnection, MCPToolCallParams, MCPToolCallResult, MCPToolDefinition } from "./types";
 
 /** Reconnect callback: tears down stale connection, returns new one or null. */
+/** 重连回调：拆除过期连接，返回新连接或 null。 */
 export type MCPReconnect = () => Promise<MCPServerConnection | null>;
 
 /**
  * Network-level and stale-session errors that warrant a reconnect + single retry.
  * Conservative: only catches errors where the server is likely alive but the
  * connection object is stale (dead SSE, expired session, refused after restart).
+ * 网络层和过期会话错误，值得重连并重试一次。
+ * 保守策略：仅捕获服务器可能存活但连接对象过期的错误
+ * （死掉的 SSE、过期会话、重启后拒绝连接）。
  */
 const RETRIABLE_PATTERNS = [
 	"econnrefused",
@@ -40,16 +47,19 @@ const RETRIABLE_PATTERNS = [
 	"network error",
 ];
 
+/** 判断错误是否为可重试的连接错误 */
 export function isRetriableConnectionError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message.toLowerCase();
-	// Stale session (server restarted, old session ID is gone)
+	// 过期会话（服务器已重启，旧会话 ID 不存在）
 	if (/^http (404|502|503):/.test(msg)) return true;
 	return RETRIABLE_PATTERNS.some(p => msg.includes(p));
 }
 
+/** MCP 工具参数类型 */
 type MCPToolArgs = NonNullable<MCPToolCallParams["arguments"]>;
 
+/** 规范化工具参数，确保返回对象类型 */
 function normalizeToolArgs(value: unknown): MCPToolArgs {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		return {};
@@ -58,22 +68,30 @@ function normalizeToolArgs(value: unknown): MCPToolArgs {
 }
 
 /** Details included in MCP tool results for rendering */
+/** MCP 工具结果中包含的详情信息，用于渲染 */
 export interface MCPToolDetails {
 	/** Server name */
+	/** 服务器名称 */
 	serverName: string;
 	/** Original MCP tool name */
+	/** 原始 MCP 工具名称 */
 	mcpToolName: string;
 	/** Whether the call resulted in an error */
+	/** 调用是否产生了错误 */
 	isError?: boolean;
 	/** Raw content from MCP response */
+	/** MCP 响应的原始内容 */
 	rawContent?: MCPContent[];
 	/** Provider ID (e.g., "claude", "mcp-json") */
+	/** 提供商 ID（如 "claude"、"mcp-json"） */
 	provider?: string;
 	/** Provider display name (e.g., "Claude Code", "MCP Config") */
+	/** 提供商显示名称（如 "Claude Code"、"MCP Config"） */
 	providerName?: string;
 }
 /**
  * Format MCP content for LLM consumption.
+ * 将 MCP 内容格式化为 LLM 可消费的文本。
  */
 function formatMCPContent(content: MCPContent[]): string {
 	const parts: string[] = [];
@@ -100,6 +118,7 @@ function formatMCPContent(content: MCPContent[]): string {
 }
 
 /** Build a CustomToolResult from a callTool response. */
+/** 从 callTool 响应构建 CustomToolResult。 */
 function buildResult(
 	result: MCPToolCallResult,
 	serverName: string,
@@ -123,6 +142,7 @@ function buildResult(
 }
 
 /** Build an error CustomToolResult from a caught exception. */
+/** 从捕获的异常构建错误 CustomToolResult。 */
 function buildErrorResult(
 	error: unknown,
 	serverName: string,
@@ -138,12 +158,14 @@ function buildErrorResult(
 }
 
 /** Re-throw abort-related errors so they bypass error-result handling. */
+/** 重新抛出中止相关的错误，使其绕过错误结果处理。 */
 function rethrowIfAborted(error: unknown, signal?: AbortSignal): void {
 	if (error instanceof ToolAbortError) throw error;
 	if (error instanceof Error && error.name === "AbortError") throw new ToolAbortError();
 	if (signal?.aborted) throw new ToolAbortError();
 }
 
+/** 支持中止信号的重连操作 */
 async function reconnectWithAbort(reconnect: MCPReconnect, signal?: AbortSignal): Promise<MCPServerConnection | null> {
 	try {
 		return await untilAborted(signal, reconnect);
@@ -155,12 +177,17 @@ async function reconnectWithAbort(reconnect: MCPReconnect, signal?: AbortSignal)
 
 /**
  * Create a unique tool name for an MCP tool.
+ * 为 MCP 工具创建唯一的工具名称。
  *
  * Prefixes with server name to avoid conflicts. If the tool name already
  * starts with the server name (e.g., server "puppeteer" with tool
  * "puppeteer_screenshot"), strips the redundant prefix to produce
  * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
+ * 以服务器名称为前缀以避免冲突。如果工具名已以服务器名开头
+ * （如服务器 "puppeteer" 的工具 "puppeteer_screenshot"），
+ * 则去除冗余前缀，生成 "mcp__puppeteer_screenshot" 而非 "mcp__puppeteer_puppeteer_screenshot"。
  */
+/** 清理 MCP 工具名称部分，仅保留小写字母和下划线 */
 function sanitizeMCPToolNamePart(value: string, fallback: string): string {
 	const sanitized = value
 		.toLowerCase()
@@ -171,11 +198,12 @@ function sanitizeMCPToolNamePart(value: string, fallback: string): string {
 	return sanitized.length > 0 ? sanitized : fallback;
 }
 
+/** 根据服务器名和工具名创建 MCP 工具的唯一名称 */
 export function createMCPToolName(serverName: string, toolName: string): string {
 	const sanitizedServerName = sanitizeMCPToolNamePart(serverName, "server");
 	const sanitizedToolName = sanitizeMCPToolNamePart(toolName, "tool");
 
-	// Strip redundant server name prefix from tool name if present
+	// 如果存在，去除工具名中冗余的服务器名前缀
 	const prefixWithUnderscore = `${sanitizedServerName}_`;
 
 	let normalizedToolName = sanitizedToolName;
@@ -188,9 +216,12 @@ export function createMCPToolName(serverName: string, toolName: string): string 
 
 /**
  * Parse an MCP tool name back to server and tool components.
+ * 将 MCP 工具名称解析回服务器名和工具名组件。
  *
  * Note: This returns the normalized tool name (with server prefix stripped).
  * The original MCP tool name may have had the server name as a prefix.
+ * 注意：返回的是规范化后的工具名（已去除服务器名前缀）。
+ * 原始 MCP 工具名可能以服务器名作为前缀。
  */
 export function parseMCPToolName(name: string): { serverName: string; toolName: string } | null {
 	if (!name.startsWith("mcp__")) return null;
@@ -207,6 +238,7 @@ export function parseMCPToolName(name: string): { serverName: string; toolName: 
 
 /**
  * CustomTool wrapping an MCP tool with an active connection.
+ * 包装 MCP 工具并持有活跃连接的 CustomTool 实现。
  */
 export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly name: string;
@@ -214,11 +246,14 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly description: string;
 	readonly parameters: TSchema;
 	/** Original MCP tool name (before normalization) */
+	/** 原始 MCP 工具名称（规范化前） */
 	readonly mcpToolName: string;
 	/** Server name */
+	/** 服务器名称 */
 	readonly mcpServerName: string;
 
 	/** Create MCPTool instances for all tools from an MCP server connection */
+	/** 从 MCP 服务器连接为所有工具创建 MCPTool 实例 */
 	static fromTools(connection: MCPServerConnection, tools: MCPToolDefinition[], reconnect?: MCPReconnect): MCPTool[] {
 		return tools.map(tool => new MCPTool(connection, tool, reconnect));
 	}
@@ -236,14 +271,17 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.mcpServerName = connection.name;
 	}
 
+	/** 渲染工具调用的 TUI 显示 */
 	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
 		return renderMCPCall(normalizeToolArgs(args), theme, this.label);
 	}
 
+	/** 渲染工具结果的 TUI 显示 */
 	renderResult(result: CustomToolResult<MCPToolDetails>, options: RenderResultOptions, theme: Theme, args?: unknown) {
 		return renderMCPResult(result, options, theme, normalizeToolArgs(args));
 	}
 
+	/** 执行 MCP 工具调用，支持连接错误时自动重连重试 */
 	async execute(
 		_toolCallId: string,
 		params: unknown,
@@ -264,7 +302,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 			if (this.reconnect && isRetriableConnectionError(error)) {
 				const newConn = await reconnectWithAbort(this.reconnect, signal);
 				if (newConn) {
-					// Rebind so subsequent calls on this instance use the fresh connection
+					// 重新绑定，使该实例的后续调用使用新连接
 					this.connection = newConn;
 					const retryProvider = newConn._source?.provider ?? provider;
 					const retryProviderName = newConn._source?.providerName ?? providerName;
@@ -290,6 +328,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 
 /**
  * CustomTool wrapping an MCP tool with deferred connection resolution.
+ * 包装 MCP 工具并使用延迟连接解析的 CustomTool 实现。
  */
 export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly name: string;
@@ -297,13 +336,16 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly description: string;
 	readonly parameters: TSchema;
 	/** Original MCP tool name (before normalization) */
+	/** 原始 MCP 工具名称（规范化前） */
 	readonly mcpToolName: string;
 	/** Server name */
+	/** 服务器名称 */
 	readonly mcpServerName: string;
 	readonly #fallbackProvider: string | undefined;
 	readonly #fallbackProviderName: string | undefined;
 
 	/** Create DeferredMCPTool instances for all tools from an MCP server */
+	/** 从 MCP 服务器为所有工具创建 DeferredMCPTool 实例 */
 	static fromTools(
 		serverName: string,
 		tools: MCPToolDefinition[],
@@ -331,14 +373,17 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.#fallbackProviderName = source?.providerName;
 	}
 
+	/** 渲染工具调用的 TUI 显示 */
 	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
 		return renderMCPCall(normalizeToolArgs(args), theme, this.label);
 	}
 
+	/** 渲染工具结果的 TUI 显示 */
 	renderResult(result: CustomToolResult<MCPToolDetails>, options: RenderResultOptions, theme: Theme, args?: unknown) {
 		return renderMCPResult(result, options, theme, normalizeToolArgs(args));
 	}
 
+	/** 执行延迟 MCP 工具调用，先等待连接建立再执行，支持重连重试 */
 	async execute(
 		_toolCallId: string,
 		params: unknown,
@@ -388,9 +433,9 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				return buildErrorResult(callError, this.serverName, this.tool.name, provider, providerName);
 			}
 		} catch (connError) {
-			// getConnection() failed — server never connected or connection lost.
-			// This is always worth a reconnect attempt for deferred tools, since the
-			// error ("MCP server not connected") isn't a network error from callTool.
+			// getConnection() 失败 — 服务器从未连接或连接已丢失。
+			// 对于延迟工具，总是值得尝试重连，因为错误
+			// （"MCP server not connected"）不是来自 callTool 的网络错误。
 			rethrowIfAborted(connError, signal);
 			if (this.reconnect) {
 				const newConn = await reconnectWithAbort(this.reconnect, signal);
@@ -414,3 +459,4 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		}
 	}
 }
+

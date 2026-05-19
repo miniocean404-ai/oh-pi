@@ -1,4 +1,9 @@
+
 /**
+ * 编辑工具的差异生成和替换模式工具。
+ *
+ * 提供差异字符串生成功能和非补丁模式下使用的替换编辑逻辑。
+ *
  * Diff generation and replace-mode utilities for the edit tool.
  *
  * Provides diff string generation and the replace-mode edit logic
@@ -10,25 +15,36 @@ import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./modes/repl
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
 import { readEditFileText } from "./read-file";
 
+/** 差异结果，包含差异字符串和首个变更行号 */
 export interface DiffResult {
 	diff: string;
 	firstChangedLine: number | undefined;
 }
 
+/** 差异错误，包含错误信息 */
 export interface DiffError {
 	error: string;
 }
 
+/** 差异块，表示一个独立的变更区域 */
 export interface DiffHunk {
+	/** 变更上下文（如函数签名） */
 	changeContext?: string;
+	/** 旧文件起始行号 */
 	oldStartLine?: number;
+	/** 新文件起始行号 */
 	newStartLine?: number;
+	/** 是否包含上下文行 */
 	hasContextLines: boolean;
+	/** 旧文件的行内容 */
 	oldLines: string[];
+	/** 新文件的行内容 */
 	newLines: string[];
+	/** 是否为文件末尾 */
 	isEndOfFile: boolean;
 }
 
+/** 解析错误类，附带可选的行号信息 */
 export class ParseError extends Error {
 	constructor(
 		message: string,
@@ -39,6 +55,7 @@ export class ParseError extends Error {
 	}
 }
 
+/** 应用补丁时的错误类 */
 export class ApplyPatchError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -47,14 +64,18 @@ export class ApplyPatchError extends Error {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Diff String Generation
+// 差异字符串生成
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 格式化带行号的差异行 */
 function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, content: string): string {
 	return `${prefix}${lineNum}|${content}`;
 }
 
 /**
+ * 生成带行号和上下文的统一差异字符串。
+ * 返回差异字符串和首个变更行号（新文件中的行号）。
+ *
  * Generate a unified diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
@@ -75,12 +96,12 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 		}
 
 		if (part.added || part.removed) {
-			// Capture the first changed line (in the new file)
+			// 捕获首个变更行号（新文件中的行号）
 			if (firstChangedLine === undefined) {
 				firstChangedLine = newLineNum;
 			}
 
-			// Show the change
+			// 显示变更内容
 			for (const line of raw) {
 				if (part.added) {
 					output.push(formatNumberedDiffLine("+", newLineNum, line));
@@ -92,7 +113,7 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 			}
 			lastWasChange = true;
 		} else {
-			// Context lines - only show a few before/after changes
+			// 上下文行 - 只显示变更前后的几行
 			const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
 
 			if (lastWasChange || nextPartIsChange) {
@@ -149,7 +170,7 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 					newLineNum += trailingSkip;
 				}
 			} else {
-				// Skip these context lines entirely
+				// 完全跳过这些上下文行
 				oldLineNum += raw.length;
 				newLineNum += raw.length;
 			}
@@ -162,26 +183,36 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Replace Mode Logic
+// 替换模式逻辑
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 替换选项 */
 export interface ReplaceOptions {
+	/** 是否允许模糊匹配 */
 	/** Allow fuzzy matching */
 	fuzzy: boolean;
+	/** 是否替换所有匹配项 */
 	/** Replace all occurrences */
 	all: boolean;
+	/** 模糊匹配的相似度阈值 */
 	/** Similarity threshold for fuzzy matching */
 	threshold?: number;
 }
 
+/** 替换结果 */
 export interface ReplaceResult {
+	/** 替换后的新内容 */
 	/** The new content after replacements */
 	content: string;
+	/** 执行的替换次数 */
 	/** Number of replacements made */
 	count: number;
 }
 
 /**
+ * 生成不含文件头部的统一差异字符串。
+ * 返回差异字符串和首个变更行号（新文件中的行号）。
+ *
  * Generate a unified diff string without file headers.
  * Returns both the diff string and the first changed line number (in the new file).
  */
@@ -219,13 +250,16 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 	return { diff: output.join("\n"), firstChangedLine };
 }
 
+// 以下为差异解析相关的常量和标记
 const EOF_MARKER = "*** End of File";
 const CHANGE_CONTEXT_MARKER = "@@ ";
 const EMPTY_CHANGE_CONTEXT_MARKER = "@@";
 const UNIFIED_HUNK_HEADER_REGEX = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@(?:\s*(.*))?$/;
 const LINE_HINT_REGEX = /^lines?\s+(\d+)(?:\s*-\s*(\d+))?(?:\s*@@)?$/i;
 const TOP_OF_FILE_REGEX = /^(top|start|beginning)\s+of\s+file$/i;
+/** 多文件标记列表 */
 const MULTI_FILE_MARKERS = ["*** Update File:", "*** Add File:", "*** Delete File:", "diff --git "];
+/** 差异元数据前缀列表 */
 const DIFF_METADATA_PREFIXES = [
 	"*** Update File:",
 	"*** Add File:",
@@ -246,6 +280,7 @@ const DIFF_METADATA_PREFIXES = [
 const PATCH_WRAPPER_PREFIXES = ["*** Begin Patch", "*** End Patch"];
 const MAX_OCCURRENCE_PREVIEWS = 5;
 
+/** 判断是否为差异内容行（以空格、+ 或 - 开头） */
 function isDiffContentLine(line: string): boolean {
 	const firstChar = line[0];
 	if (firstChar === " ") return true;
@@ -258,14 +293,17 @@ function isDiffContentLine(line: string): boolean {
 	return false;
 }
 
+/** 检查行是否以指定前缀之一开头 */
 function matchesTrimmedPrefix(line: string, prefixes: string[]): boolean {
 	return prefixes.some(prefix => line.startsWith(prefix));
 }
 
+/** 判断是否为补丁包装行（如 "*** Begin Patch"） */
 function isPatchWrapperLine(line: string): boolean {
 	return line === "***" || matchesTrimmedPrefix(line, PATCH_WRAPPER_PREFIXES);
 }
 
+/** 格式化多重匹配错误消息 */
 function formatOccurrenceMatchError(
 	occurrences: number,
 	occurrencePreviews: string[] | undefined,
@@ -278,6 +316,7 @@ function formatOccurrenceMatchError(
 	return `Found ${occurrences} occurrences${pathSuffix}${moreMsg}:\n\n${previews}\n\nAdd more context lines to disambiguate.`;
 }
 
+/** 标准化差异文本，去除包装行和元数据前缀 */
 export function normalizeDiff(diff: string): string {
 	let lines = diff.split("\n");
 
@@ -308,6 +347,7 @@ export function normalizeDiff(diff: string): string {
 	return lines.join("\n");
 }
 
+/** 标准化创建文件的内容，去除行首的 "+" 前缀 */
 export function normalizeCreateContent(content: string): string {
 	const lines = content.split("\n");
 	const nonEmptyLines = lines.filter(line => line.length > 0);
@@ -325,6 +365,7 @@ export function normalizeCreateContent(content: string): string {
 	return content;
 }
 
+/** 统一差异块头部信息 */
 interface UnifiedHunkHeader {
 	oldStartLine: number;
 	oldLineCount: number;
@@ -333,6 +374,7 @@ interface UnifiedHunkHeader {
 	changeContext?: string;
 }
 
+/** 解析统一差异块头部（如 @@ -1,3 +1,4 @@） */
 function parseUnifiedHunkHeader(line: string): UnifiedHunkHeader | undefined {
 	const match = line.match(UNIFIED_HUNK_HEADER_REGEX);
 	if (!match) return undefined;
@@ -352,6 +394,7 @@ function parseUnifiedHunkHeader(line: string): UnifiedHunkHeader | undefined {
 	};
 }
 
+/** 判断是否为统一差异的元数据行 */
 function isUnifiedDiffMetadataLine(line: string): boolean {
 	return matchesTrimmedPrefix(
 		line,
@@ -364,6 +407,7 @@ interface ParseHunkResult {
 	linesConsumed: number;
 }
 
+/** 解析单个差异块，返回解析后的块和消耗的行数 */
 function parseOneHunk(lines: string[], lineNumber: number, allowMissingContext: boolean): ParseHunkResult {
 	if (lines.length === 0) {
 		throw new ParseError("Diff does not contain any lines", lineNumber);
@@ -530,6 +574,7 @@ function parseOneHunk(lines: string[], lineNumber: number, allowMissingContext: 
 	return { hunk, linesConsumed: parsedLines + startIndex };
 }
 
+/** 去除差异块中行的行号前缀（如模型生成的 "123 content" 格式） */
 function stripLineNumberPrefixes(hunk: DiffHunk): void {
 	const allLines = [...hunk.oldLines, ...hunk.newLines].filter(line => line.trim().length > 0);
 	if (allLines.length < 2) return;
@@ -563,6 +608,7 @@ function stripLineNumberPrefixes(hunk: DiffHunk): void {
 	hunk.newLines = hunk.newLines.map(strip);
 }
 
+/** 统计差异文本中的多文件标记数量 */
 function countMultiFileMarkers(diff: string): number {
 	const counts = new Map<string, number>();
 	const paths = new Set<string>();
@@ -595,6 +641,7 @@ function countMultiFileMarkers(diff: string): number {
 	return maxCount;
 }
 
+/** 从多文件标记行中提取文件路径 */
 function extractMarkerPath(line: string): string | undefined {
 	if (line.startsWith("diff --git ")) {
 		const parts = line.split(/\s+/);
@@ -614,6 +661,7 @@ function extractMarkerPath(line: string): string | undefined {
 	return undefined;
 }
 
+/** 解析差异文本为差异块数组 */
 export function parseDiffHunks(diff: string): DiffHunk[] {
 	const multiFileCount = countMultiFileMarkers(diff);
 	if (multiFileCount > 1) {
@@ -656,6 +704,8 @@ export function parseDiffHunks(diff: string): DiffHunk[] {
 }
 
 /**
+ * 使用模糊匹配在内容中查找并替换文本。
+ *
  * Find and replace text in content using fuzzy matching.
  */
 export function replaceText(content: string, oldText: string, newText: string, options: ReplaceOptions): ReplaceResult {
@@ -669,7 +719,7 @@ export function replaceText(content: string, oldText: string, newText: string, o
 	let count = 0;
 
 	if (options.all) {
-		// Check for exact matches first
+		// 先检查精确匹配
 		const exactCount = normalizedContent.split(normalizedOldText).length - 1;
 		if (exactCount > 0) {
 			return {
@@ -678,7 +728,7 @@ export function replaceText(content: string, oldText: string, newText: string, o
 			};
 		}
 
-		// No exact matches - try fuzzy matching iteratively
+		// 没有精确匹配 - 尝试迭代模糊匹配
 		while (true) {
 			const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
 				allowFuzzy: options.fuzzy,
@@ -709,7 +759,7 @@ export function replaceText(content: string, oldText: string, newText: string, o
 		return { content: normalizedContent, count };
 	}
 
-	// Single replacement mode
+	// 单次替换模式
 	const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
 		allowFuzzy: options.fuzzy,
 		threshold,
@@ -734,10 +784,13 @@ export function replaceText(content: string, oldText: string, newText: string, o
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Preview/Diff Computation
+// 预览/差异计算
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * 计算编辑操作的差异而不实际应用。
+ * 用于工具执行前在 TUI 中渲染预览。
+ *
  * Compute the diff for an edit operation without applying it.
  * Used for preview rendering in the TUI before the tool executes.
  */
@@ -776,7 +829,7 @@ export async function computeEditDiff(
 		});
 
 		if (result.count === 0) {
-			// Get closest match for error message
+			// 获取最接近的匹配用于错误消息
 			const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
 				allowFuzzy: fuzzy,
 				threshold: threshold ?? DEFAULT_FUZZY_THRESHOLD,
@@ -808,3 +861,4 @@ export async function computeEditDiff(
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
 }
+

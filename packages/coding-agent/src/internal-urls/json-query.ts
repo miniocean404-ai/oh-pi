@@ -1,8 +1,13 @@
+
 /**
  * JSON query parser and executor for agent:// URL extraction.
  *
  * Supports jq-like syntax: .foo, [0], .foo.bar[0].baz, ["special-key"]
  * Also supports path form: /foo/bar/0 -> .foo.bar[0]
+ *
+ * 用于 agent:// URL 内容提取的 JSON 查询解析器与执行器。
+ * 支持类 jq 语法：.foo、[0]、.foo.bar[0].baz、["special-key"]；
+ * 也支持路径形式：/foo/bar/0 -> .foo.bar[0]。
  */
 
 /**
@@ -11,6 +16,8 @@
  * @example
  * parseQuery(".foo.bar[0]") // ["foo", "bar", 0]
  * parseQuery(".foo['special-key']") // ["foo", "special-key"]
+ *
+ * 将类 jq 查询字符串解析为 token 数组。
  */
 export function parseQuery(query: string): Array<string | number> {
 	let input = query.trim();
@@ -71,6 +78,8 @@ export function parseQuery(query: string): Array<string | number> {
  *
  * @example
  * applyQuery({ foo: { bar: [1, 2, 3] } }, ".foo.bar[0]") // 1
+ *
+ * 将已解析的查询应用到 JSON 值上，按 token 依次下钻。
  */
 export function applyQuery(data: unknown, query: string): unknown {
 	const tokens = parseQuery(query);
@@ -96,6 +105,10 @@ export function applyQuery(data: unknown, query: string): unknown {
  * Trailing slash is normalized (ignored).
  *
  * Segments that are not valid identifiers use bracket notation: ['segment']
+ *
+ * 将 URL 路径形式转换为查询字符串。
+ * 路径形式：/foo/bar/0 -> .foo.bar[0]，末尾斜杠会被规范化忽略。
+ * 不符合标识符规则的段会改用方括号写法：['segment']。
  */
 export function pathToQuery(urlPath: string): string {
 	if (!urlPath || urlPath === "/") return "";
@@ -124,3 +137,4 @@ export function pathToQuery(urlPath: string): string {
 
 	return parts.join("");
 }
+

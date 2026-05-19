@@ -1,18 +1,22 @@
+
 /**
  * Biome CLI-based linter client.
  * Uses Biome's CLI with JSON output instead of LSP (which has stale diagnostics issues).
+ * 基于 Biome CLI 的代码检查客户端，使用 JSON 输出而非 LSP（LSP 存在诊断信息过期问题）。
  */
 import path from "node:path";
 import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../../lsp/types";
 
 // =============================================================================
-// Biome JSON Output Types
+// Biome JSON 输出类型
 // =============================================================================
 
+/** Biome JSON 输出结构 */
 interface BiomeJsonOutput {
 	diagnostics: BiomeDiagnostic[];
 }
 
+/** Biome 诊断信息 */
 interface BiomeDiagnostic {
 	category: string; // e.g., "lint/correctness/noUnusedVariables"
 	severity: "error" | "warning" | "info" | "hint";
@@ -25,11 +29,12 @@ interface BiomeDiagnostic {
 }
 
 // =============================================================================
-// Helpers
+// 辅助函数
 // =============================================================================
 
 /**
  * Convert byte offset to line:column using source code.
+ * 使用源代码将字节偏移转换为行:列
  */
 function offsetToPosition(source: string, offset: number): { line: number; column: number } {
 	let line = 1;
@@ -55,6 +60,7 @@ function offsetToPosition(source: string, offset: number): { line: number; colum
 
 /**
  * Parse Biome severity to LSP DiagnosticSeverity.
+ * 将 Biome 严重级别转换为 LSP DiagnosticSeverity
  */
 function parseSeverity(severity: string): DiagnosticSeverity {
 	switch (severity) {
@@ -73,6 +79,7 @@ function parseSeverity(severity: string): DiagnosticSeverity {
 
 /**
  * Run a Biome CLI command.
+ * 运行 Biome CLI 命令
  */
 async function runBiome(
 	args: string[],
@@ -99,15 +106,17 @@ async function runBiome(
 }
 
 // =============================================================================
-// Biome Client
+// Biome 客户端
 // =============================================================================
 
 /**
  * Biome CLI-based linter client.
  * Parses Biome's --reporter=json output into LSP Diagnostic format.
+ * 基于 Biome CLI 的代码检查客户端，将 --reporter=json 输出解析为 LSP Diagnostic 格式。
  */
 export class BiomeClient implements LinterClient {
 	/** Factory method for creating BiomeClient instances */
+	/** 创建 BiomeClient 实例的工厂方法 */
 	static create(config: ServerConfig, cwd: string): LinterClient {
 		return new BiomeClient(config, cwd);
 	}
@@ -117,24 +126,26 @@ export class BiomeClient implements LinterClient {
 		private readonly cwd: string,
 	) {}
 
+	/** 格式化文件内容 */
 	async format(filePath: string, content: string): Promise<string> {
-		// Write content to file first
+		// 先将内容写入文件
 		await Bun.write(filePath, content);
 
-		// Run biome format --write
+		// 运行 biome format --write
 		const result = await runBiome(["format", "--write", filePath], this.cwd, this.config.resolvedCommand);
 
 		if (result.success) {
-			// Read back formatted content
+			// 读回格式化后的内容
 			return await Bun.file(filePath).text();
 		}
 
-		// Format failed, return original
+		// 格式化失败，返回原内容
 		return content;
 	}
 
+	/** 对文件进行代码检查 */
 	async lint(filePath: string): Promise<Diagnostic[]> {
-		// Run biome lint with JSON reporter
+		// 使用 JSON reporter 运行 biome lint
 		const result = await runBiome(["lint", "--reporter=json", filePath], this.cwd, this.config.resolvedCommand);
 
 		return this.#parseJsonOutput(result.stdout, filePath);
@@ -142,6 +153,7 @@ export class BiomeClient implements LinterClient {
 
 	/**
 	 * Parse Biome's JSON output into LSP Diagnostics.
+	 * 将 Biome 的 JSON 输出解析为 LSP 诊断信息
 	 */
 	#parseJsonOutput(jsonOutput: string, targetFile: string): Diagnostic[] {
 		const diagnostics: Diagnostic[] = [];
@@ -153,17 +165,17 @@ export class BiomeClient implements LinterClient {
 				const location = diag.location;
 				if (!location?.path?.file) continue;
 
-				// Resolve file path
+				// 解析文件路径
 				const diagFile = path.isAbsolute(location.path.file)
 					? location.path.file
 					: path.join(this.cwd, location.path.file);
 
-				// Only include diagnostics for the target file
+				// 仅包含目标文件的诊断信息
 				if (path.resolve(diagFile) !== path.resolve(targetFile)) {
 					continue;
 				}
 
-				// Convert byte offset to line:column
+				// 将字节偏移转换为行:列
 				let startLine = 1;
 				let startColumn = 1;
 				let endLine = 1;
@@ -196,7 +208,9 @@ export class BiomeClient implements LinterClient {
 		return diagnostics;
 	}
 
+	/** 释放资源（CLI 客户端无需释放） */
 	dispose(): void {
-		// Nothing to dispose for CLI client
+		// CLI 客户端无需释放资源
 	}
 }
+

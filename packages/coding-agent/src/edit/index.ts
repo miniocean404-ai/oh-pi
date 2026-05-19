@@ -1,3 +1,10 @@
+
+/**
+ * 编辑工具模块入口。
+ *
+ * 统一管理多种编辑模式（replace、patch、hashline、apply_patch、vim），
+ * 提供编辑工具的创建、参数解析和执行入口。
+ */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type * as z from "zod/v4";
@@ -35,7 +42,7 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./file-read-cache";
 
-// Resolve the `$HFMT$` and `$HSEP$` placeholders in the hashline Lark grammar.
+// 解析 hashline Lark 语法中的 `$HFMT$` 和 `$HSEP$` 占位符
 const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
 export * from "../hashline";
@@ -46,6 +53,7 @@ export * from "./normalize";
 export * from "./renderer";
 export * from "./streaming";
 
+/** 编辑工具输入 schema 的联合类型 */
 type TInput =
 	| typeof replaceEditSchema
 	| typeof patchEditSchema
@@ -53,10 +61,14 @@ type TInput =
 	| typeof vimSchema
 	| typeof applyPatchSchema;
 
+/** Vim 模式的参数类型 */
 type VimParams = z.infer<typeof vimSchema>;
+/** 所有编辑模式参数的联合类型 */
 type EditParams = ReplaceParams | PatchParams | HashlineParams | VimParams | ApplyPatchParams;
+/** 编辑工具结果详情的联合类型 */
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 
+/** 编辑模式定义，包含描述、参数 schema 和执行函数 */
 type EditModeDefinition = {
 	description: (session: ToolSession) => string;
 	parameters: TInput;
@@ -69,6 +81,7 @@ type EditModeDefinition = {
 	) => Promise<AgentToolResult<EditToolResultDetails, TInput>>;
 };
 
+/** 解析环境变量配置的编辑模式，返回 undefined 表示使用自动模式 */
 function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
 	if (!rawEditMode || rawEditMode === "auto") {
 		return undefined;
@@ -82,6 +95,7 @@ function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
 	return editMode;
 }
 
+/** 解析是否允许模糊匹配的配置值 */
 function resolveAllowFuzzy(session: ToolSession, rawValue: string): boolean {
 	switch (rawValue) {
 		case "true":
@@ -97,6 +111,7 @@ function resolveAllowFuzzy(session: ToolSession, rawValue: string): boolean {
 	}
 }
 
+/** 解析模糊匹配的相似度阈值配置 */
 function resolveFuzzyThreshold(session: ToolSession, rawValue: string): number {
 	if (rawValue === "auto") {
 		return session.settings.get("edit.fuzzyThreshold");
@@ -110,6 +125,7 @@ function resolveFuzzyThreshold(session: ToolSession, rawValue: string): number {
 	return threshold;
 }
 
+/** 创建编辑工具的 LSP 写入透传回调（处理格式化和诊断） */
 function createEditWritethrough(session: ToolSession): WritethroughCallback {
 	const enableLsp = session.enableLsp ?? true;
 	const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnEdit");
@@ -117,6 +133,7 @@ function createEditWritethrough(session: ToolSession): WritethroughCallback {
 	return enableLsp ? createLspWritethrough(session.cwd, { enableFormat, enableDiagnostics }) : writethroughNoop;
 }
 
+/** 运行 apply_patch 文件操作并聚合多文件结果 */
 /** Run apply_patch file operations and aggregate their multi-file result. */
 async function executeApplyPatchPerFile(
 	fileEntries: {
@@ -127,7 +144,7 @@ async function executeApplyPatchPerFile(
 	onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 ): Promise<AgentToolResult<EditToolDetails, TInput>> {
 	if (fileEntries.length === 1) {
-		// Single file — just run directly, no wrapping
+		// 单文件 — 直接运行，无需包装
 		return fileEntries[0].run(outerBatchRequest);
 	}
 
@@ -164,7 +181,7 @@ async function executeApplyPatchPerFile(
 			contentTexts.push(`Error editing ${path}: ${errorText}`);
 		}
 
-		// Emit partial result after each file so UI shows progressive completion
+		// 每个文件处理完后发送部分结果，使 UI 显示渐进完成状态
 		if (!isLast && onUpdate) {
 			onUpdate({
 				content: [{ type: "text", text: contentTexts.join("\n") }],
@@ -193,6 +210,7 @@ async function executeApplyPatchPerFile(
 	};
 }
 
+/** 对同一文件路径执行多个编辑操作并聚合结果 */
 async function executeSinglePathEntries(
 	path: string,
 	runs: ((batchRequest: LspBatchRequest | undefined) => Promise<AgentToolResult<EditToolDetails>>)[],
@@ -264,14 +282,13 @@ async function executeSinglePathEntries(
 			...(hasFirstOldText ? { oldText: firstOldText } : {}),
 			...(hasLastNewText ? { newText: lastNewText } : {}),
 		},
-		// Any per-entry failure marks the aggregate result as an error so the
-		// renderer takes the error branch instead of falling through to the
-		// streaming-edit preview (which displays the *proposed* diff and looks
-		// indistinguishable from success).
+		// 任何单条失败都将聚合结果标记为错误，使渲染器走错误分支
+		// 而不是穿透到流式编辑预览（后者显示"提议的"diff，看起来像成功）
 		...(errorCount > 0 ? { isError: true } : {}),
 	};
 }
 
+/** 编辑工具主类，支持多种编辑模式（replace、patch、hashline、apply_patch、vim） */
 export class EditTool implements AgentTool<TInput> {
 	readonly name = "edit";
 	readonly label = "Edit";
@@ -280,11 +297,17 @@ export class EditTool implements AgentTool<TInput> {
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 
+	/** 是否允许模糊匹配 */
 	readonly #allowFuzzy: boolean;
+	/** 模糊匹配相似度阈值 */
 	readonly #fuzzyThreshold: number;
+	/** LSP 写入透传回调 */
 	readonly #writethrough: WritethroughCallback;
+	/** 配置指定的编辑模式 */
 	readonly #editMode?: EditMode;
+	/** Vim 编辑工具实例 */
 	readonly #vimTool: VimTool;
+	/** 待处理的延迟诊断请求映射 */
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
 
 	constructor(private readonly session: ToolSession) {
@@ -301,20 +324,27 @@ export class EditTool implements AgentTool<TInput> {
 		this.#vimTool = new VimTool(session);
 	}
 
+	/** 获取当前生效的编辑模式 */
 	get mode(): EditMode {
 		if (this.#editMode) return this.#editMode;
 		return resolveEditMode(this.session);
 	}
 
+	/** 获取当前编辑模式的工具描述 */
 	get description(): string {
 		return this.#getModeDefinition().description(this.session);
 	}
 
+	/** 获取当前编辑模式的参数 schema */
 	get parameters(): TInput {
 		return this.#getModeDefinition().parameters;
 	}
 
 	/**
+	 * 当处于 `apply_patch` 模式时，暴露 Codex Lark 语法，以便支持 OpenAI 风格
+	 * 自定义工具的提供者可以生成受语法约束的变体。不支持自定义工具的提供者会
+	 * 忽略此字段，回退为通过 `parameters` 生成 JSON 函数工具。
+	 *
 	 * When in `apply_patch` mode, expose the Codex Lark grammar so providers
 	 * that support OpenAI-style custom tools can emit a grammar-constrained
 	 * variant. Providers that don't support custom tools ignore this field
@@ -327,6 +357,10 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	/**
+	 * 自定义工具变体激活时使用的通信层工具名称。GPT-5+ 针对字面名称
+	 * `apply_patch` 进行训练；内部这只是 `edit` 工具的一种模式。
+	 * agent 循环分发器同时匹配内部 `name` 和 `customWireName`，确保调用正确路由。
+	 *
 	 * Wire-level tool name used when the custom-tool variant is active. GPT-5+
 	 * is trained on the literal name `apply_patch`; internally this is just a
 	 * mode of the `edit` tool. The agent-loop dispatcher matches both the
@@ -337,6 +371,7 @@ export class EditTool implements AgentTool<TInput> {
 		return "apply_patch";
 	}
 
+	/** 执行编辑操作 */
 	async execute(
 		_toolCallId: string,
 		params: EditParams,
@@ -348,6 +383,7 @@ export class EditTool implements AgentTool<TInput> {
 		return modeDefinition.execute(this, params, signal, getLspBatchRequest(context?.toolCall), onUpdate);
 	}
 
+	/** 获取当前编辑模式的定义（描述、参数、执行函数） */
 	#getModeDefinition(): EditModeDefinition {
 		return {
 			patch: {
@@ -486,6 +522,7 @@ export class EditTool implements AgentTool<TInput> {
 		}[this.mode];
 	}
 
+	/** 为指定路径启动延迟诊断，处理诊断结果的异步返回 */
 	#beginDeferredDiagnosticsForPath(path: string): WritethroughDeferredHandle {
 		const existingDeferred = this.#pendingDeferredFetches.get(path);
 		if (existingDeferred) {
@@ -510,6 +547,7 @@ export class EditTool implements AgentTool<TInput> {
 		};
 	}
 
+	/** 注入延迟到达的 LSP 诊断信息（在编辑工具返回后到达的诊断） */
 	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult): void {
 		const summary = diagnostics.summary ?? "";
 		const lines = diagnostics.messages ?? [];
@@ -526,3 +564,4 @@ export class EditTool implements AgentTool<TInput> {
 		});
 	}
 }
+

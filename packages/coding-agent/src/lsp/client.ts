@@ -1,3 +1,4 @@
+
 import { isEnoent, logger, ptree, untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
@@ -14,21 +15,26 @@ import type {
 import { detectLanguageId, fileToUri } from "./utils";
 
 // =============================================================================
-// Client State
+// 客户端状态
 // =============================================================================
 
+/** 已创建的 LSP 客户端实例映射 */
 const clients = new Map<string, LspClient>();
+/** 正在创建中的客户端锁（防止重复创建） */
 const clientLocks = new Map<string, Promise<LspClient>>();
+/** 文件操作锁（防止并发文件操作冲突） */
 const fileOperationLocks = new Map<string, Promise<void>>();
 
-// Idle timeout configuration (disabled by default)
+// 空闲超时配置（默认禁用）
 let idleTimeoutMs: number | null = null;
 let idleCheckInterval: NodeJS.Timeout | null = null;
+/** 空闲检查间隔（毫秒） */
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 
 /**
  * Configure the idle timeout for LSP clients.
  * @param ms - Timeout in milliseconds, or null/undefined to disable
+ * 配置 LSP 客户端的空闲超时
  */
 export function setIdleTimeout(ms: number | null | undefined): void {
 	idleTimeoutMs = ms ?? null;
@@ -40,6 +46,7 @@ export function setIdleTimeout(ms: number | null | undefined): void {
 	}
 }
 
+/** 启动空闲检查定时器 */
 function startIdleChecker(): void {
 	if (idleCheckInterval) return;
 	idleCheckInterval = setInterval(() => {
@@ -53,6 +60,7 @@ function startIdleChecker(): void {
 	}, IDLE_CHECK_INTERVAL_MS);
 }
 
+/** 停止空闲检查定时器 */
 function stopIdleChecker(): void {
 	if (idleCheckInterval) {
 		clearInterval(idleCheckInterval);
@@ -61,9 +69,10 @@ function stopIdleChecker(): void {
 }
 
 // =============================================================================
-// Client Capabilities
+// 客户端能力声明
 // =============================================================================
 
+/** LSP 客户端向服务器声明的能力 */
 const CLIENT_CAPABILITIES = {
 	textDocument: {
 		synchronization: {
@@ -169,17 +178,18 @@ const CLIENT_CAPABILITIES = {
 };
 
 // =============================================================================
-// LSP Message Protocol
+// LSP 消息协议
 // =============================================================================
 
 /**
  * Parse a single LSP message from a buffer.
  * Returns the parsed message and remaining buffer, or null if incomplete.
+ * 从缓冲区解析单条 LSP 消息，返回解析结果和剩余缓冲区，不完整时返回 null。
  */
 function parseMessage(
 	buffer: Buffer,
 ): { message: LspJsonRpcResponse | LspJsonRpcNotification; remaining: Buffer } | null {
-	// Only decode enough to find the header
+	// 只解码足够多的内容来找到头部
 	const headerEndIndex = findHeaderEnd(buffer);
 	if (headerEndIndex === -1) return null;
 
@@ -205,6 +215,7 @@ function parseMessage(
 
 /**
  * Find the end of the header section (before \r\n\r\n)
+ * 查找头部结束位置（\r\n\r\n 之前）
  */
 function findHeaderEnd(buffer: Uint8Array): number {
 	for (let i = 0; i < buffer.length - 3; i++) {
@@ -215,6 +226,7 @@ function findHeaderEnd(buffer: Uint8Array): number {
 	return -1;
 }
 
+/** 向 LSP 服务器写入消息 */
 async function writeMessage(
 	sink: Bun.FileSink,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
@@ -224,6 +236,7 @@ async function writeMessage(
 	await sink.flush();
 }
 
+/** 将消息加入写入队列（串行化） */
 function queueWriteMessage(
 	client: LspClient,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
@@ -234,12 +247,13 @@ function queueWriteMessage(
 }
 
 // =============================================================================
-// Message Reader
+// 消息读取器
 // =============================================================================
 
 /**
  * Start background message reader for a client.
  * Routes responses to pending requests and handles notifications.
+ * 启动后台消息读取器，将响应路由到待处理请求并处理通知。
  */
 async function startMessageReader(client: LspClient): Promise<void> {
 	if (client.isReading) return;
@@ -252,21 +266,21 @@ async function startMessageReader(client: LspClient): Promise<void> {
 			const { done, value } = await reader.read();
 			if (done) break;
 
-			// Atomically update buffer before processing
+			// 在处理前原子更新缓冲区
 			const currentBuffer: Buffer = Buffer.concat([client.messageBuffer, value]);
 			client.messageBuffer = currentBuffer;
 
-			// Process all complete messages in buffer
-			// Use local variable to avoid race with concurrent buffer updates
+			// 处理缓冲区中所有完整消息
+			// 使用局部变量避免与并发缓冲区更新的竞争
 			let workingBuffer = currentBuffer;
 			let parsed = parseMessage(workingBuffer);
 			while (parsed) {
 				const { message, remaining } = parsed;
 				workingBuffer = remaining;
 
-				// Route message
+				// 路由消息
 				if ("id" in message && message.id !== undefined) {
-					// Response to a request
+					// 对请求的响应
 					const pending = client.pendingRequests.get(message.id);
 					if (pending) {
 						client.pendingRequests.delete(message.id);
@@ -279,7 +293,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 						await handleServerRequest(client, message as LspJsonRpcRequest);
 					}
 				} else if ("method" in message) {
-					// Server notification
+					// 服务器通知
 					if (message.method === "textDocument/publishDiagnostics" && message.params) {
 						const params = message.params as PublishDiagnosticsParams;
 						client.diagnostics.set(params.uri, {
@@ -303,11 +317,11 @@ async function startMessageReader(client: LspClient): Promise<void> {
 				parsed = parseMessage(workingBuffer);
 			}
 
-			// Atomically commit processed buffer
+			// 原子提交已处理的缓冲区
 			client.messageBuffer = workingBuffer;
 		}
 	} catch (err) {
-		// Connection closed or error - reject all pending requests
+		// 连接关闭或错误 - 拒绝所有待处理请求
 		for (const pending of Array.from(client.pendingRequests.values())) {
 			pending.reject(new Error(`LSP connection closed: ${err}`));
 		}
@@ -320,6 +334,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 
 /**
  * Handle workspace/configuration requests from the server.
+ * 处理服务器发来的 workspace/configuration 请求
  */
 async function handleConfigurationRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
 	if (typeof message.id !== "number") return;
@@ -334,6 +349,7 @@ async function handleConfigurationRequest(client: LspClient, message: LspJsonRpc
 
 /**
  * Handle workspace/applyEdit requests from the server.
+ * 处理服务器发来的 workspace/applyEdit 请求
  */
 async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
 	if (typeof message.id !== "number") return;
@@ -358,6 +374,7 @@ async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequ
 
 /**
  * Respond to a server-initiated request.
+ * 响应服务器发起的请求
  */
 async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
 	if (message.method === "workspace/configuration") {
@@ -369,7 +386,7 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		return;
 	}
 	if (message.method === "window/workDoneProgress/create") {
-		// Accept progress token registration from the server
+		// 接受服务器的进度令牌注册
 		if (typeof message.id === "number") {
 			await sendResponse(client, message.id, null, message.method);
 		}
@@ -384,6 +401,7 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 
 /**
  * Send an LSP response to the server.
+ * 向服务器发送 LSP 响应
  */
 async function sendResponse(
 	client: LspClient,
@@ -406,13 +424,15 @@ async function sendResponse(
 }
 
 // =============================================================================
-// Client Management
+// 客户端管理
 // =============================================================================
 
 /** Timeout for warmup initialize requests (5 seconds) */
+/** 预热初始化请求超时（5 秒） */
 export const WARMUP_TIMEOUT_MS = 5000;
 
 /** Max time to wait for the server to report project loading completion via $/progress */
+/** 等待服务器通过 $/progress 报告项目加载完成的最大时间 */
 const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 
 /**
@@ -424,25 +444,25 @@ const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 export async function getOrCreateClient(config: ServerConfig, cwd: string, initTimeoutMs?: number): Promise<LspClient> {
 	const key = `${config.command}:${cwd}`;
 
-	// Check if client already exists
+	// 检查客户端是否已存在
 	const existingClient = clients.get(key);
 	if (existingClient) {
 		existingClient.lastActivity = Date.now();
 		return existingClient;
 	}
 
-	// Check if another coroutine is already creating this client
+	// 检查是否有其他协程正在创建此客户端
 	const existingLock = clientLocks.get(key);
 	if (existingLock) {
 		return existingLock;
 	}
 
-	// Create new client with lock
+	// 加锁创建新客户端
 	const clientPromise = (async () => {
 		const baseCommand = config.resolvedCommand ?? config.command;
 		const baseArgs = config.args ?? [];
 
-		// Wrap with lspmux if available and supported
+		// 如果可用且支持，则使用 lspmux 包装
 		const { command, args, env } = isLspmuxSupported(baseCommand)
 			? await getLspmuxCommand(baseCommand, baseArgs)
 			: { command: baseCommand, args: baseArgs };
@@ -457,7 +477,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 		const projectLoaded = new Promise<void>(resolve => {
 			resolveProjectLoaded = resolve;
 		});
-		// Auto-resolve after timeout in case server doesn't use progress tokens
+		// 超时后自动解决，以防服务器不使用进度令牌
 		const projectLoadTimeout = setTimeout(resolveProjectLoaded, PROJECT_LOAD_TIMEOUT_MS);
 		const originalResolve = resolveProjectLoaded;
 		resolveProjectLoaded = () => {
@@ -485,7 +505,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 		};
 		clients.set(key, client);
 
-		// Register crash recovery - remove client on process exit
+		// 注册崩溃恢复 - 进程退出时移除客户端
 		proc.exited.then(() => {
 			clients.delete(key);
 			clientLocks.delete(key);
@@ -512,11 +532,11 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			}
 		});
 
-		// Start background message reader
+		// 启动后台消息读取器
 		startMessageReader(client);
 
 		try {
-			// Send initialize request
+			// 发送初始化请求
 			const initResult = (await sendRequest(
 				client,
 				"initialize",
@@ -538,12 +558,12 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 
 			client.serverCapabilities = initResult.capabilities as LspClient["serverCapabilities"];
 
-			// Send initialized notification
+			// 发送初始化完成通知
 			await sendNotification(client, "initialized", {});
 
 			return client;
 		} catch (err) {
-			// Clean up on initialization failure
+			// 初始化失败时清理
 			clients.delete(key);
 			clientLocks.delete(key);
 			proc.kill();
@@ -560,6 +580,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 /**
  * Ensure a file is opened in the LSP client.
  * Sends didOpen notification if the file is not already tracked.
+ * 确保文件已在 LSP 客户端中打开，若未跟踪则发送 didOpen 通知。
  */
 export async function ensureFileOpen(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
 	throwIfAborted(signal);
@@ -622,6 +643,7 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
  * Wait for the server's initial project loading to complete.
  * Races the server's $/progress tracking against the abort signal.
  * Returns immediately if loading already completed or timed out.
+ * 等待服务器初始项目加载完成，与中止信号竞争。若已完成或超时则立即返回。
  */
 export async function waitForProjectLoaded(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (signal?.aborted) return;
@@ -636,6 +658,7 @@ export async function waitForProjectLoaded(client: LspClient, signal?: AbortSign
 /**
  * Sync in-memory content to the LSP client without reading from disk.
  * Use this to provide instant feedback during edits before the file is saved.
+ * 将内存中的内容同步到 LSP 客户端（不从磁盘读取），用于文件保存前提供即时反馈。
  */
 export async function syncContent(
 	client: LspClient,
@@ -695,6 +718,7 @@ export async function syncContent(
 /**
  * Notify LSP that a file was saved.
  * Assumes content was already synced via syncContent - just sends didSave.
+ * 通知 LSP 文件已保存。假定内容已通过 syncContent 同步。
  */
 export async function notifySaved(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
 	const uri = fileToUri(filePath);
@@ -711,6 +735,7 @@ export async function notifySaved(client: LspClient, filePath: string, signal?: 
 /**
  * Refresh a file in the LSP client.
  * Increments version, sends didChange and didSave notifications.
+ * 刷新 LSP 客户端中的文件，递增版本号并发送 didChange 和 didSave 通知。
  */
 export async function refreshFile(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
 	throwIfAborted(signal);
@@ -770,6 +795,7 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 
 /**
  * Shutdown a specific client by key.
+ * 关闭特定客户端实例
  */
 async function shutdownClientInstance(client: LspClient): Promise<void> {
 	const err = new Error("LSP client shutdown");
@@ -785,6 +811,7 @@ async function shutdownClientInstance(client: LspClient): Promise<void> {
 	await Promise.race([client.proc.exited.catch(() => {}), Bun.sleep(1_000)]);
 }
 
+/** 按键关闭 LSP 客户端 */
 export async function shutdownClient(key: string): Promise<void> {
 	const client = clients.get(key);
 	if (!client) return;
@@ -793,14 +820,16 @@ export async function shutdownClient(key: string): Promise<void> {
 }
 
 // =============================================================================
-// LSP Protocol Methods
+// LSP 协议方法
 // =============================================================================
 
 /** Default timeout for LSP requests (30 seconds) */
+/** LSP 请求默认超时（30 秒） */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 /**
  * Send an LSP request and wait for response.
+ * 发送 LSP 请求并等待响应
  */
 export async function sendRequest(
 	client: LspClient,
@@ -809,7 +838,7 @@ export async function sendRequest(
 	signal?: AbortSignal,
 	timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<unknown> {
-	// Atomically increment and capture request ID
+	// 原子递增并捕获请求 ID
 	const id = ++client.requestId;
 	if (signal?.aborted) {
 		const reason = signal.reason instanceof Error ? signal.reason : new ToolAbortError();
@@ -843,7 +872,7 @@ export async function sendRequest(
 		reject(reason);
 	};
 
-	// Set timeout
+	// 设置超时
 	timeout = setTimeout(() => {
 		if (client.pendingRequests.has(id)) {
 			client.pendingRequests.delete(id);
@@ -860,7 +889,7 @@ export async function sendRequest(
 		}
 	}
 
-	// Register pending request with timeout wrapper
+	// 注册带超时包装的待处理请求
 	client.pendingRequests.set(id, {
 		resolve: result => {
 			if (timeout) clearTimeout(timeout);
@@ -875,7 +904,7 @@ export async function sendRequest(
 		method,
 	});
 
-	// Write request
+	// 写入请求
 	queueWriteMessage(client, request).catch(err => {
 		if (timeout) clearTimeout(timeout);
 		client.pendingRequests.delete(id);
@@ -887,6 +916,7 @@ export async function sendRequest(
 
 /**
  * Send an LSP notification (no response expected).
+ * 发送 LSP 通知（不期望响应）
  */
 export async function sendNotification(client: LspClient, method: string, params: unknown): Promise<void> {
 	const notification: LspJsonRpcNotification = {
@@ -901,6 +931,7 @@ export async function sendNotification(client: LspClient, method: string, params
 
 /**
  * Shutdown all LSP clients.
+ * 关闭所有 LSP 客户端
  */
 export async function shutdownAll(): Promise<void> {
 	const clientsToShutdown = Array.from(clients.values());
@@ -909,6 +940,7 @@ export async function shutdownAll(): Promise<void> {
 }
 
 /** Status of an LSP server */
+/** LSP 服务器状态 */
 export interface LspServerStatus {
 	name: string;
 	status: "connecting" | "ready" | "error";
@@ -918,6 +950,7 @@ export interface LspServerStatus {
 
 /**
  * Get status of all active LSP clients.
+ * 获取所有活跃 LSP 客户端的状态
  */
 export function getActiveClients(): LspServerStatus[] {
 	return Array.from(clients.values()).map(client => ({
@@ -928,10 +961,10 @@ export function getActiveClients(): LspServerStatus[] {
 }
 
 // =============================================================================
-// Process Cleanup
+// 进程清理
 // =============================================================================
 
-// Register cleanup on module unload
+// 模块卸载时注册清理回调
 if (typeof process !== "undefined") {
 	process.on("beforeExit", () => {
 		void shutdownAll();
@@ -949,3 +982,4 @@ if (typeof process !== "undefined") {
 		})();
 	});
 }
+

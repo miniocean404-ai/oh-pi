@@ -1,3 +1,4 @@
+
 /**
  * Protocol handler for artifact:// URLs.
  *
@@ -8,6 +9,12 @@
  * - artifact://<id> - Full artifact content
  *
  * Pagination is handled by the read tool via offset/limit parameters.
+ *
+ * artifact:// URL 协议处理器。
+ * 在所有活跃会话的 artifacts 目录中查找解析 artifact ID。
+ * 与 agent:// 不同，artifact 是纯文本，不做 JSON 提取。
+ * URL 形式：artifact://<id> 返回完整 artifact 内容。
+ * 分页由 read 工具通过 offset/limit 参数自行处理。
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -15,6 +22,9 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
+/**
+ * artifact:// URL 处理器：按数字 ID 在 artifacts 目录中定位并读取文件。
+ */
 export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly scheme = "artifact";
 	readonly immutable = true;
@@ -78,3 +88,4 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

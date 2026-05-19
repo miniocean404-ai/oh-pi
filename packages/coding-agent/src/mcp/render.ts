@@ -1,8 +1,11 @@
+
 /**
  * TUI rendering for MCP tools.
+ * MCP 工具的终端 UI 渲染。
  *
  * Provides structured display of MCP tool calls and results,
  * showing args and output in JSON tree format similar to task tool.
+ * 提供 MCP 工具调用和结果的结构化显示，以类似任务工具的 JSON 树格式展示参数和输出。
  */
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -24,6 +27,7 @@ import type { MCPToolDetails } from "./tool-bridge";
 
 /**
  * Render MCP tool call.
+ * 渲染 MCP 工具调用。
  */
 export function renderMCPCall(args: Record<string, unknown>, theme: Theme, label: string): Component {
 	const lines: string[] = [];
@@ -42,6 +46,7 @@ export function renderMCPCall(args: Record<string, unknown>, theme: Theme, label
 
 /**
  * Render MCP tool result.
+ * 渲染 MCP 工具结果。
  */
 export function renderMCPResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: MCPToolDetails; isError?: boolean },
@@ -52,7 +57,7 @@ export function renderMCPResult(
 	const { expanded } = options;
 	const lines: string[] = [];
 
-	// Args section (when expanded)
+	// 参数部分（展开时显示）
 	if (expanded && args && typeof args === "object" && Object.keys(args).length > 0) {
 		lines.push(`${theme.fg("dim", "Args")}`);
 		const maxDepth = JSON_TREE_MAX_DEPTH_EXPANDED;
@@ -67,7 +72,7 @@ export function renderMCPResult(
 		lines.push(""); // Blank line before output
 	}
 
-	// Output section
+	// 输出部分
 	const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
 	const trimmedOutput = textContent.trimEnd();
 
@@ -76,7 +81,7 @@ export function renderMCPResult(
 		return new Text(lines.join("\n"), 0, 0);
 	}
 
-	// Try to parse as JSON for structured display
+	// 尝试解析为 JSON 以进行结构化显示
 	if (trimmedOutput.startsWith("{") || trimmedOutput.startsWith("[")) {
 		try {
 			const parsed = JSON.parse(trimmedOutput);
@@ -89,7 +94,7 @@ export function renderMCPResult(
 				for (const line of tree.lines) {
 					lines.push(line);
 				}
-				// Always show expand hint when collapsed (expanded view shows longer values and deeper nesting)
+				// 折叠时始终显示展开提示（展开视图显示更长的值和更深的嵌套）
 				if (!expanded) {
 					lines.push(formatExpandHint(theme, expanded, true));
 				} else if (tree.truncated) {
@@ -98,11 +103,11 @@ export function renderMCPResult(
 				return new Text(lines.join("\n"), 0, 0);
 			}
 		} catch {
-			// Fall through to raw output
+			// 回退到原始输出
 		}
 	}
 
-	// Raw text output
+	// 原始文本输出
 	const outputLines = trimmedOutput.split("\n");
 	const maxOutputLines = expanded ? 12 : 4;
 	const displayLines = outputLines.slice(0, maxOutputLines);
@@ -115,9 +120,10 @@ export function renderMCPResult(
 		const remaining = outputLines.length - maxOutputLines;
 		lines.push(`${theme.fg("dim", `… ${remaining} more lines`)} ${formatExpandHint(theme, expanded, true)}`);
 	} else if (!expanded) {
-		// Show expand hint when collapsed even if all lines shown (lines may be truncated)
+		// 折叠时即使所有行都已显示也展示展开提示（行可能被截断）
 		lines.push(formatExpandHint(theme, expanded, true));
 	}
 
 	return new Text(lines.join("\n"), 0, 0);
 }
+

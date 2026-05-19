@@ -1,8 +1,11 @@
+
 /**
  * Generic OAuth flow for MCP servers.
+ * MCP 服务器的通用 OAuth 流程。
  *
  * Allows users to authenticate with any OAuth-compatible MCP server
  * by providing authorization URL, token URL, and client credentials.
+ * 通过提供授权 URL、令牌 URL 和客户端凭据，允许用户认证任何兼容 OAuth 的 MCP 服务器。
  */
 
 import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/utils/oauth/callback-server";
@@ -12,10 +15,12 @@ import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oa
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
 
+/** 检查主机名是否为回环地址 */
 function isLoopbackHostname(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
+/** 解析重定向 URI */
 function resolveRedirectUri(redirectUri: string | undefined): string | undefined {
 	const configured = redirectUri;
 	const trimmed = configured?.trim();
@@ -31,15 +36,18 @@ function resolveRedirectUri(redirectUri: string | undefined): string | undefined
 	return configured;
 }
 
+/** 解析重定向 URI 为 URL 对象 */
 function parseRedirectUri(redirectUri: string | undefined): URL | undefined {
 	return redirectUri ? new URL(redirectUri) : undefined;
 }
 
+/** 获取 URI 的端口号 */
 function getUriPort(uri: URL): number {
 	if (uri.port !== "") return Number(uri.port);
 	return uri.protocol === "https:" ? 443 : 80;
 }
 
+/** 验证重定向配置 */
 function validateRedirectConfig(config: MCPOAuthConfig, redirectUri: string | undefined): void {
 	const parsed = parseRedirectUri(redirectUri);
 	if (!parsed || parsed.protocol !== "https:" || !isLoopbackHostname(parsed.hostname)) {
@@ -59,6 +67,7 @@ function validateRedirectConfig(config: MCPOAuthConfig, redirectUri: string | un
 	}
 }
 
+/** 解析回调端口 */
 function resolveCallbackPort(callbackPort: number | undefined, redirectUri: string | undefined): number {
 	if (callbackPort !== undefined) return callbackPort;
 
@@ -71,6 +80,7 @@ function resolveCallbackPort(callbackPort: number | undefined, redirectUri: stri
 	return Number.isFinite(port) && port > 0 ? port : DEFAULT_PORT;
 }
 
+/** 解析回调路径 */
 function resolveCallbackPath(callbackPath: string | undefined, redirectUri: string | undefined): string {
 	const trimmed = callbackPath?.trim();
 	if (trimmed) return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
@@ -80,12 +90,14 @@ function resolveCallbackPath(callbackPath: string | undefined, redirectUri: stri
 	return CALLBACK_PATH;
 }
 
+/** 解析回调主机名 */
 function resolveCallbackHostname(redirectUri: string | undefined): string | undefined {
 	const parsed = parseRedirectUri(redirectUri);
 	if (!parsed || !isLoopbackHostname(parsed.hostname)) return undefined;
 	return parsed.hostname;
 }
 
+/** 解析回调选项 */
 function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOptions {
 	const redirectUri = resolveRedirectUri(config.redirectUri);
 	validateRedirectConfig(config, redirectUri);
@@ -97,28 +109,39 @@ function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOption
 	};
 }
 
+/** MCP OAuth 配置 */
 export interface MCPOAuthConfig {
 	/** Authorization endpoint URL */
+	/** 授权端点 URL */
 	authorizationUrl: string;
 	/** Token endpoint URL */
+	/** 令牌端点 URL */
 	tokenUrl: string;
 	/** Client ID (optional when already embedded in authorization URL) */
+	/** 客户端 ID（当已嵌入授权 URL 时可选） */
 	clientId?: string;
 	/** Client secret (optional for PKCE flows) */
+	/** 客户端密钥（PKCE 流程中可选） */
 	clientSecret?: string;
 	/** OAuth scopes (space-separated) */
+	/** OAuth 作用域（空格分隔） */
 	scopes?: string;
 	/** Exact redirect URI to advertise to the provider */
+	/** 向提供者通告的精确重定向 URI */
 	redirectUri?: string;
 	/** Custom callback port (default: 3000) */
+	/** 自定义回调端口（默认: 3000） */
 	callbackPort?: number;
 	/** Custom callback path (default: /callback or redirectUri pathname) */
+	/** 自定义回调路径（默认: /callback 或 redirectUri 路径名） */
 	callbackPath?: string;
 }
 
 /**
  * Generic OAuth flow for MCP servers.
+ * MCP 服务器的通用 OAuth 流程。
  * Supports standard OAuth 2.0 authorization code flow with PKCE.
+ * 支持标准 OAuth 2.0 授权码流程和 PKCE。
  */
 export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#resolvedClientId?: string;
@@ -174,13 +197,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		params.set("redirect_uri", redirectUri);
 		params.set("state", state);
 
-		// Add PKCE challenge (some providers require it)
+		// 添加 PKCE 验证（某些提供者要求）
 		const codeVerifier = this.#generateCodeVerifier();
 		const codeChallenge = await this.#generateCodeChallenge(codeVerifier);
 		params.set("code_challenge", codeChallenge);
 		params.set("code_challenge_method", "S256");
 
-		// Store code verifier for token exchange
+		// 存储 code verifier 用于令牌交换
 		this.#codeVerifier = codeVerifier;
 
 		if (!params.get("client_id")) {
@@ -200,13 +223,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			params.set("client_id", this.#resolvedClientId);
 		}
 
-		// Add code verifier for PKCE
+		// 添加 PKCE 的 code verifier
 		if (this.#codeVerifier) {
 			params.set("code_verifier", this.#codeVerifier);
 		}
 		this.#codeVerifier = undefined;
 
-		// Add client secret if provided
+		// 如果提供了客户端密钥则添加
 		const clientSecret = this.config.clientSecret ?? this.#registeredClientSecret;
 		if (clientSecret) {
 			params.set("client_secret", clientSecret);
@@ -232,7 +255,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			token_type?: string;
 		};
 
-		// Calculate expiry timestamp
+		// 计算过期时间戳
 		const expiresIn = data.expires_in ?? 3600; // Default to 1 hour
 		const expires = Date.now() + expiresIn * 1000;
 
@@ -245,6 +268,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Generate PKCE code verifier (random string).
+	 * 生成 PKCE code verifier（随机字符串）。
 	 */
 	#generateCodeVerifier(): string {
 		const bytes = new Uint8Array(32);
@@ -254,6 +278,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Generate PKCE code challenge from verifier.
+	 * 从 verifier 生成 PKCE code challenge。
 	 */
 	async #generateCodeChallenge(verifier: string): Promise<string> {
 		const encoder = new TextEncoder();
@@ -264,12 +289,14 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Base64 URL encode (without padding).
+	 * Base64 URL 编码（无填充）。
 	 */
 	#base64UrlEncode(bytes: Uint8Array): string {
 		const base64 = btoa(String.fromCharCode(...bytes));
 		return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 	}
 
+	/** 解析客户端 ID */
 	#resolveClientId(config: MCPOAuthConfig): string | undefined {
 		const fromConfig = config.clientId?.trim();
 		if (fromConfig) return fromConfig;
@@ -283,6 +310,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Try OAuth dynamic client registration when provider requires a client_id.
+	 * 当提供者要求 client_id 时尝试 OAuth 动态客户端注册。
 	 */
 	async #tryRegisterClient(redirectUri: string): Promise<void> {
 		const registrationEndpoint = await this.#resolveRegistrationEndpoint();
@@ -367,7 +395,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 /**
  * Refresh an MCP OAuth token using the standard refresh_token grant.
+ * 使用标准 refresh_token 授权刷新 MCP OAuth 令牌。
  * Returns updated credentials; preserves the old refresh token if the server doesn't rotate it.
+ * 返回更新的凭据；如果服务器不轮换 refresh token，则保留旧的。
  */
 export async function refreshMCPOAuthToken(
 	tokenUrl: string,
@@ -405,3 +435,4 @@ export async function refreshMCPOAuthToken(
 		expires: Date.now() + expiresIn * 1000,
 	};
 }
+

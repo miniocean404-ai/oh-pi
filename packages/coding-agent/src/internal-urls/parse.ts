@@ -1,3 +1,4 @@
+
 /**
  * Internal URL parser that handles colons in the host segment.
  *
@@ -8,6 +9,13 @@
  *
  * All code that parses internal URLs (router, protocol handlers, tools)
  * MUST use this function instead of calling `new URL()` directly.
+ *
+ * 能正确处理 host 段中冒号的内部 URL 解析器。
+ * 标准 `new URL()` 会把冒号当作端口分隔符，导致 `skill://plugin:name`
+ * 这类带命名空间的内部 URL 解析失败。本解析器先用正则提取各部分组件，
+ * 在 `new URL()` 解析失败时再回退构造一个最小化的类 URL 对象。
+ * 所有解析内部 URL 的代码（router、协议处理器、tools）都必须使用此函数，
+ * 严禁直接调用 `new URL()`。
  */
 import type { InternalUrl } from "./types";
 
@@ -19,6 +27,10 @@ const PATHNAME_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i;
  *
  * Handles URLs where `new URL()` would fail (e.g., `skill://plugin:name`
  * where the colon is not a port separator).
+ *
+ * 将内部 URL 字符串解析为 InternalUrl。
+ * 能处理 `new URL()` 解析失败的场景（例如 `skill://plugin:name`，
+ * 其中冒号并非端口分隔符）。
  */
 export function parseInternalUrl(input: string): InternalUrl {
 	const hostMatch = input.match(SCHEME_HOST_RE);
@@ -70,3 +82,4 @@ export function parseInternalUrl(input: string): InternalUrl {
 	result.rawPathname = pathMatch?.[1] ?? parsed.pathname;
 	return result;
 }
+

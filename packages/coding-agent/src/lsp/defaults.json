@@ -1,3 +1,4 @@
+
 {
 	"rust-analyzer": {
 		"command": "rust-analyzer",
@@ -491,3 +492,4 @@
 		"isLinter": true
 	}
 }
+

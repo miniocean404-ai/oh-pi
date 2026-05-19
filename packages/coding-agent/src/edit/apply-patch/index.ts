@@ -1,4 +1,13 @@
+
 /**
+ * Codex `apply_patch` 信封格式的多文件编排器。
+ *
+ * 与工具注册解耦：接收原始补丁文本和选项，解析后通过
+ * `../modes/patch.ts` 中的单文件 `applyPatch` 应用每个块。
+ *
+ * 根据规范 §6.1，块按顺序应用且非原子操作——如果第 N 个块失败，
+ * 第 `0..N-1` 个块已写入磁盘。通过返回逐文件结果来体现这一点。
+ *
  * Multi-file orchestrator for the Codex `apply_patch` envelope.
  *
  * Decoupled from tool-registration: takes raw patch text + options, parses
@@ -17,9 +26,12 @@ import { parseApplyPatch } from "./parser";
 
 export * from "./parser";
 
+/** Codex 补丁应用结果 */
 export interface ApplyCodexPatchResult {
+	/** 按尝试顺序排列的单文件应用结果 */
 	/** Single-file apply results in the order they were attempted. */
 	results: ApplyPatchResult[];
+	/** 按操作分组的受影响文件路径，用于 §9.1 摘要 */
 	/** Affected file paths grouped by operation, for the §9.1 summary. */
 	affected: {
 		added: string[];
@@ -29,6 +41,11 @@ export interface ApplyCodexPatchResult {
 }
 
 /**
+ * 应用完整的 Codex `*** Begin Patch` 信封。
+ *
+ * 注意：重命名操作在 `modified` 下以原始路径报告（规范 §9.1），
+ * 而非作为删除 + 添加。
+ *
  * Apply a full Codex `*** Begin Patch` envelope.
  *
  * Note: renames are reported under `modified` with the original path (spec
@@ -57,6 +74,7 @@ export async function applyCodexPatch(patchText: string, options: ApplyPatchOpti
 	return { results, affected };
 }
 
+/** 记录受影响的文件路径到对应的操作分组 */
 function recordAffected(
 	affected: ApplyCodexPatchResult["affected"],
 	hunk: PatchInput,
@@ -76,6 +94,8 @@ function recordAffected(
 }
 
 /**
+ * 格式化规范 §9.1 中描述的 A/M/D（添加/修改/删除）摘要。
+ *
  * Format the A/M/D summary described in spec §9.1.
  */
 export function formatApplyCodexPatchSummary(affected: ApplyCodexPatchResult["affected"]): string {
@@ -85,3 +105,4 @@ export function formatApplyCodexPatchSummary(affected: ApplyCodexPatchResult["af
 	for (const p of affected.deleted) lines.push(`D ${p}`);
 	return lines.join("\n");
 }
+

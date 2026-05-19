@@ -1,3 +1,7 @@
+
+/**
+ * memory:// 协议处理器：访问项目记忆 artifacts 文件。
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
@@ -13,6 +17,10 @@ const MEMORY_NAMESPACE = "root";
  * Snapshot of memory roots for every registered session, deduped.
  * Each session has its own cwd (possibly a worktree), so subagents and main
  * may see different roots.
+ *
+ * 收集所有已注册会话的记忆根目录快照（去重后）。
+ * 每个会话都有自己的 cwd（可能是 worktree），因此子 Agent 与主 Agent
+ * 看到的根目录可能不同。
  */
 function memoryRootsFromRegistry(): string[] {
 	const agentDir = getAgentDir();
@@ -39,6 +47,8 @@ function toMemoryValidationError(error: unknown): Error {
 
 /**
  * Resolve a memory:// URL to an absolute filesystem path under memory root.
+ *
+ * 将 memory:// URL 解析为位于 memory 根目录之下的绝对文件路径。
  */
 export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): string {
 	const namespace = url.rawHost || url.hostname;
@@ -126,6 +136,10 @@ async function tryResolveInRoot(url: InternalUrl, memoryRoot: string): Promise<I
  * Walks every active session's memory root. Worktree-based subagents have
  * their own root; first one containing the file wins. Parent and subagent
  * sharing a cwd see the same file regardless of order.
+ *
+ * memory:// URL 协议处理器。
+ * 会遍历所有活跃会话的记忆根目录。基于 worktree 的子 Agent 拥有独立根目录，
+ * 命中文件的第一个根目录获胜；父子共用同一 cwd 时无论顺序都会读到同一文件。
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
@@ -162,3 +176,4 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 		throw new Error(`Memory file not found: ${url.href}`);
 	}
 }
+

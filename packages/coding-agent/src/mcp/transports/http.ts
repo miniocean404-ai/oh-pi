@@ -1,8 +1,12 @@
+
 /**
  * MCP HTTP transport (Streamable HTTP).
+ * MCP HTTP 传输（流式 HTTP）。
  *
  * Implements JSON-RPC 2.0 over HTTP POST with optional SSE streaming.
  * Based on MCP spec 2025-03-26.
+ * 基于 HTTP POST 实现 JSON-RPC 2.0，支持可选的 SSE 流式响应。
+ * 基于 MCP 规范 2025-03-26。
  */
 import { logger, readSseJson, Snowflake } from "@oh-my-pi/pi-utils";
 import type {
@@ -20,17 +24,27 @@ import { toJsonRpcError } from "../../mcp/types";
 /**
  * HTTP transport for MCP servers.
  * Uses POST for requests, supports SSE responses.
+ * MCP 服务器的 HTTP 传输实现。
+ * 使用 POST 发送请求，支持 SSE 响应。
  */
 export class HttpTransport implements MCPTransport {
+	/** 是否已连接 */
 	#connected = false;
+	/** 会话 ID */
 	#sessionId: string | null = null;
+	/** SSE 连接的中止控制器 */
 	#sseConnection: AbortController | null = null;
 
+	/** 连接关闭回调 */
 	onClose?: () => void;
+	/** 错误回调 */
 	onError?: (error: Error) => void;
+	/** 通知回调 */
 	onNotification?: (method: string, params: unknown) => void;
+	/** 服务器请求回调 */
 	onRequest?: (method: string, params: unknown) => Promise<unknown>;
 	/** Called on 401/403 to attempt token refresh. Returns updated headers or null. */
+	/** 在 401/403 时调用以尝试刷新令牌。返回更新后的请求头或 null。 */
 	onAuthError?: () => Promise<Record<string, string> | null>;
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
@@ -46,6 +60,7 @@ export class HttpTransport implements MCPTransport {
 	/**
 	 * Mark transport as connected.
 	 * HTTP doesn't need persistent connection, but we track state.
+	 * 标记传输为已连接。HTTP 不需要持久连接，但我们追踪状态。
 	 */
 	async connect(): Promise<void> {
 		if (this.#connected) return;
@@ -56,6 +71,8 @@ export class HttpTransport implements MCPTransport {
 	 * Start SSE listener for server-initiated messages.
 	 * Resolves once the SSE connection is established (or fails/unsupported).
 	 * Message reading continues in the background.
+	 * 启动 SSE 监听器接收服务器主动推送的消息。
+	 * SSE 连接建立（或失败/不支持）后 resolve。消息读取在后台持续进行。
 	 */
 	async startSSEListener(): Promise<void> {
 		if (!this.#connected) return;
@@ -91,9 +108,9 @@ export class HttpTransport implements MCPTransport {
 			return;
 		}
 
-		// Connection established — read messages in background.
-		// If the stream ends unexpectedly (server restart, network drop),
-		// fire onClose so the manager can trigger reconnection.
+		// 连接已建立 — 在后台读取消息。
+		// 如果流意外结束（服务器重启、网络中断），
+		// 触发 onClose 以便管理器发起重连。
 		const signal = this.#sseConnection.signal;
 		void this.#readSSEStream(response.body!, signal).finally(() => {
 			const wasConnected = this.#connected;
@@ -101,6 +118,7 @@ export class HttpTransport implements MCPTransport {
 			if (wasConnected) this.onClose?.();
 		});
 	}
+	/** 读取 SSE 流并分发消息 */
 	async #readSSEStream(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
 		try {
 			for await (const message of readSseJson<JsonRpcMessage>(body, signal)) {
@@ -116,22 +134,24 @@ export class HttpTransport implements MCPTransport {
 	}
 
 	/** Route an SSE message (or batch) to the appropriate handler. */
+	/** 将 SSE 消息（或批量消息）路由到对应的处理器。 */
 	#dispatchSSEMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
 		if (Array.isArray(message)) {
 			for (const m of message) this.#dispatchSSEMessage(m);
 			return;
 		}
-		// Server-to-client request: has both method and id
+		// 服务器到客户端的请求：同时包含 method 和 id
 		if ("method" in message && "id" in message && message.id != null) {
 			void this.#handleServerRequest(message as JsonRpcRequest);
 			return;
 		}
-		// Notification: has method but no id
+		// 通知：有 method 但无 id
 		if ("method" in message && !("id" in message)) {
 			this.onNotification?.(message.method, message.params);
 		}
 	}
 
+	/** 发送 JSON-RPC 请求，认证失败时自动重试一次 */
 	async request<T = unknown>(
 		method: string,
 		params?: Record<string, unknown>,
@@ -140,11 +160,11 @@ export class HttpTransport implements MCPTransport {
 		try {
 			return await this.#executeRequest<T>(method, params, options);
 		} catch (error) {
-			// Retry once on auth failure if onAuthError is wired
+			// 认证失败时重试一次（若已注册 onAuthError）
 			if (this.onAuthError && error instanceof Error && /^HTTP (401|403):/.test(error.message)) {
 				const newHeaders = await this.onAuthError();
 				if (newHeaders) {
-					// Persist refreshed headers so subsequent requests use them directly
+					// 持久化刷新后的请求头，使后续请求直接使用
 					this.config = { ...this.config, headers: newHeaders };
 					return this.#executeRequest<T>(method, params, options);
 				}
@@ -153,6 +173,7 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
+	/** 执行实际的 HTTP JSON-RPC 请求 */
 	async #executeRequest<T>(
 		method: string,
 		params: Record<string, unknown> | undefined,
@@ -180,7 +201,7 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		// Create AbortController for timeout
+		// 创建超时中止控制器
 		const timeout = this.config.timeout ?? 30000;
 		const abortController = new AbortController();
 		const timeoutId = setTimeout(() => abortController.abort(), timeout);
@@ -198,7 +219,7 @@ export class HttpTransport implements MCPTransport {
 
 			clearTimeout(timeoutId);
 
-			// Check for session ID in response
+			// 检查响应中的会话 ID
 			const newSessionId = response.headers.get("Mcp-Session-Id");
 			if (newSessionId) {
 				this.#sessionId = newSessionId;
@@ -220,12 +241,12 @@ export class HttpTransport implements MCPTransport {
 
 			const contentType = response.headers.get("Content-Type") ?? "";
 
-			// Handle SSE response
+			// 处理 SSE 响应
 			if (contentType.includes("text/event-stream")) {
 				return this.#parseSSEResponse<T>(response, id, options);
 			}
 
-			// Handle JSON response
+			// 处理 JSON 响应
 			const result = (await response.json()) as JsonRpcResponse;
 
 			if (result.error) {
@@ -245,6 +266,7 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
+	/** 解析 SSE 响应流，提取匹配的 JSON-RPC 响应并处理附带的通知/请求 */
 	#parseSSEResponse<T>(response: Response, expectedId: string | number, options?: MCPRequestOptions): Promise<T> {
 		if (!response.body) {
 			throw new Error("No response body");
@@ -260,12 +282,10 @@ export class HttpTransport implements MCPTransport {
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
 		let captured = false;
 
-		// Drain the SSE stream from a single iterator. We resolve the deferred
-		// promise as soon as the matching response arrives, then keep iterating
-		// in the background to pick up piggybacked notifications/requests.
-		// Re-reading `response.body` after `for await` breaks would lock the
-		// stream a second time and surface as "ReadableStream already has a
-		// controller", so we must not exit the loop early.
+		// 从单个迭代器中消费 SSE 流。匹配的响应到达后立即 resolve deferred promise，
+		// 然后在后台继续迭代以处理附带的通知/请求。
+		// 在 `for await` 中断后重新读取 `response.body` 会第二次锁定流，
+		// 导致 "ReadableStream already has a controller" 错误，因此不能提前退出循环。
 		const drain = async (): Promise<void> => {
 			try {
 				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, operationSignal)) {
@@ -313,6 +333,7 @@ export class HttpTransport implements MCPTransport {
 		return promise;
 	}
 
+	/** 处理服务器到客户端的 JSON-RPC 请求 */
 	async #handleServerRequest(request: JsonRpcRequest): Promise<void> {
 		if (!this.onRequest) {
 			await this.#sendServerResponse(request.id, undefined, { code: -32601, message: "Method not found" });
@@ -327,6 +348,7 @@ export class HttpTransport implements MCPTransport {
 	}
 
 	/** POST a JSON-RPC response back to the server (for server-to-client requests received via SSE). */
+	/** 将 JSON-RPC 响应 POST 回服务器（用于通过 SSE 接收的服务器到客户端请求）。 */
 	async #sendServerResponse(id: string | number, result?: unknown, error?: JsonRpcError): Promise<void> {
 		if (!this.#connected) return;
 		const body = error
@@ -347,7 +369,7 @@ export class HttpTransport implements MCPTransport {
 				body: JSON.stringify(body),
 				signal: AbortSignal.timeout(this.config.timeout ?? 30000),
 			});
-			// Retry once on auth failure if onAuthError is wired
+			// 认证失败时重试一次（若已注册 onAuthError）
 			if (this.onAuthError && (resp.status === 401 || resp.status === 403)) {
 				await resp.body?.cancel();
 				const newHeaders = await this.onAuthError();
@@ -367,10 +389,11 @@ export class HttpTransport implements MCPTransport {
 			}
 			await resp.body?.cancel();
 		} catch {
-			// Best-effort response delivery — server may have disconnected
+			// 尽力交付响应 — 服务器可能已断开连接
 		}
 	}
 
+	/** 发送 JSON-RPC 通知（无需响应） */
 	async notify(method: string, params?: Record<string, unknown>): Promise<void> {
 		if (!this.#connected) {
 			throw new Error("Transport not connected");
@@ -392,7 +415,7 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		// Create AbortController for timeout
+		// 创建超时中止控制器
 		const timeout = this.config.timeout ?? 30000;
 		const abortController = new AbortController();
 		const timeoutId = setTimeout(() => abortController.abort(), timeout);
@@ -407,17 +430,17 @@ export class HttpTransport implements MCPTransport {
 
 			clearTimeout(timeoutId);
 
-			// 202 Accepted is success for notifications
+			// 202 Accepted 对通知来说是成功响应
 			if (!response.ok && response.status !== 202) {
 				const text = await response.text();
 				throw new Error(`HTTP ${response.status}: ${text}`);
 			}
 
-			// The server may piggyback server-to-client requests or notifications
-			// on the notification response (MCP Streamable HTTP spec). Read them.
+			// 服务器可能在通知响应上附带服务器到客户端的请求或通知
+			// （MCP 流式 HTTP 规范）。读取它们。
 			const contentType = response.headers.get("Content-Type") ?? "";
 			if (contentType.includes("text/event-stream") && response.body) {
-				// Use the SSE connection's signal if available, otherwise read until stream ends
+				// 优先使用 SSE 连接的信号，否则读取直到流结束
 				const signal = this.#sseConnection?.signal ?? AbortSignal.timeout(this.config.timeout ?? 30000);
 				void this.#readSSEStream(response.body, signal);
 			} else {
@@ -432,17 +455,18 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
+	/** 关闭传输连接，中止 SSE 监听器并发送会话终止请求 */
 	async close(): Promise<void> {
 		if (!this.#connected) return;
 		this.#connected = false;
 
-		// Abort SSE listener
+		// 中止 SSE 监听器
 		if (this.#sseConnection) {
 			this.#sseConnection.abort();
 			this.#sseConnection = null;
 		}
 
-		// Send session termination if we have a session
+		// 如果有会话则发送会话终止请求
 		if (this.#sessionId) {
 			try {
 				const timeout = this.config.timeout ?? 30000;
@@ -457,7 +481,7 @@ export class HttpTransport implements MCPTransport {
 					signal: AbortSignal.timeout(timeout),
 				});
 			} catch {
-				// Ignore termination errors
+				// 忽略终止错误
 			}
 			this.#sessionId = null;
 		}
@@ -469,9 +493,11 @@ export class HttpTransport implements MCPTransport {
 
 /**
  * Create and connect an HTTP transport.
+ * 创建并连接 HTTP 传输。
  */
 export async function createHttpTransport(config: MCPHttpServerConfig | MCPSseServerConfig): Promise<HttpTransport> {
 	const transport = new HttpTransport(config);
 	await transport.connect();
 	return transport;
 }
+

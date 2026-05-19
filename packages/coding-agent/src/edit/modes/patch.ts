@@ -1,4 +1,10 @@
+
 /**
+ * 编辑工具的补丁应用逻辑。
+ *
+ * 使用模糊匹配将解析后的差异块应用到文件内容，
+ * 以稳健地处理空白和格式差异。
+ *
  * Patch application logic for the edit tool.
  *
  * Applies parsed diff hunks to file content using fuzzy matching
@@ -55,8 +61,10 @@ import {
 	seekSequence,
 } from "./replace";
 
+/** 补丁操作类型 */
 export type Operation = "create" | "delete" | "update";
 
+/** 补丁输入参数 */
 export interface PatchInput {
 	path: string;
 	op: Operation;
@@ -64,6 +72,7 @@ export interface PatchInput {
 	diff?: string;
 }
 
+/** 文件系统抽象接口 */
 export interface FileSystem {
 	exists(path: string): Promise<boolean>;
 	read(path: string): Promise<string>;
@@ -73,6 +82,7 @@ export interface FileSystem {
 	mkdir(path: string): Promise<void>;
 }
 
+/** 文件变更记录 */
 interface FileChange {
 	type: Operation;
 	path: string;
@@ -81,11 +91,13 @@ interface FileChange {
 	newContent?: string;
 }
 
+/** 应用补丁的结果 */
 export interface ApplyPatchResult {
 	change: FileChange;
 	warnings?: string[];
 }
 
+/** 应用补丁的选项 */
 export interface ApplyPatchOptions {
 	cwd: string;
 	dryRun?: boolean;
@@ -95,9 +107,10 @@ export interface ApplyPatchOptions {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Default File System
+// 默认文件系统
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 使用 Bun API 的默认文件系统实现 */
 /** Default filesystem implementation using Bun APIs */
 export const defaultFileSystem: FileSystem = {
 	async exists(path: string): Promise<boolean> {
@@ -121,17 +134,20 @@ export const defaultFileSystem: FileSystem = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Internal Types
+// 内部类型
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 替换操作描述 */
 interface Replacement {
 	startIndex: number;
 	oldLen: number;
 	newLines: string[];
 }
 
+/** 块变体类型 */
 type HunkVariantKind = "trim-common" | "dedupe-shared" | "collapse-repeated" | "single-line";
 
+/** 差异块的变体，用于回退匹配策略 */
 interface HunkVariant {
 	oldLines: string[];
 	newLines: string[];
@@ -204,9 +220,10 @@ function canConvertTabsToSpaces(oldLines: string[], actualLines: string[], space
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Replacement Computation
+// 替换计算
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 调整 newLines 的缩进以匹配 patternLines 和 actualLines 之间的差异 */
 /** Adjust indentation of newLines to match the delta between patternLines and actualLines */
 function adjustLinesIndentation(patternLines: string[], actualLines: string[], newLines: string[]): string[] {
 	if (patternLines.length === 0 || actualLines.length === 0 || newLines.length === 0) {
@@ -424,6 +441,7 @@ function adjustLinesIndentation(patternLines: string[], actualLines: string[], n
 	});
 }
 
+/** 裁剪首尾相同的上下文行 */
 function trimCommonContext(oldLines: string[], newLines: string[]): HunkVariant | undefined {
 	let start = 0;
 	let endOld = oldLines.length;
@@ -450,6 +468,7 @@ function trimCommonContext(oldLines: string[], newLines: string[]): HunkVariant 
 	return { oldLines: trimmedOld, newLines: trimmedNew, kind: "trim-common" };
 }
 
+/** 折叠连续的共享重复行 */
 function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]): HunkVariant | undefined {
 	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
 	const collapse = (lines: string[]): string[] => {
@@ -475,6 +494,7 @@ function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]):
 	return { oldLines: collapsedOld, newLines: collapsedNew, kind: "dedupe-shared" };
 }
 
+/** 折叠重复的块 */
 function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVariant | undefined {
 	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
 	const collapse = (lines: string[]): string[] => {
@@ -517,6 +537,7 @@ function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVar
 	return { oldLines: collapsedOld, newLines: collapsedNew, kind: "collapse-repeated" };
 }
 
+/** 将差异缩减为单行变更（如果只有一行不同） */
 function reduceToSingleLineChange(oldLines: string[], newLines: string[]): HunkVariant | undefined {
 	if (oldLines.length !== newLines.length || oldLines.length === 0) return undefined;
 	let changedIndex: number | undefined;
@@ -530,6 +551,7 @@ function reduceToSingleLineChange(oldLines: string[], newLines: string[]): HunkV
 	return { oldLines: [oldLines[changedIndex]], newLines: [newLines[changedIndex]], kind: "single-line" };
 }
 
+/** 构建差异块的回退匹配变体 */
 function buildFallbackVariants(hunk: DiffHunk): HunkVariant[] {
 	const variants: HunkVariant[] = [];
 	const base: HunkVariant = { oldLines: hunk.oldLines, newLines: hunk.newLines, kind: "trim-common" };
@@ -562,11 +584,13 @@ function buildFallbackVariants(hunk: DiffHunk): HunkVariant[] {
 	});
 }
 
+/** 过滤回退变体（是否允许激进策略） */
 function filterFallbackVariants(variants: HunkVariant[], allowAggressive: boolean): HunkVariant[] {
 	if (allowAggressive) return variants;
 	return variants.filter(variant => variant.kind !== "collapse-repeated" && variant.kind !== "single-line");
 }
 
+/** 在上下文位置附近查找匹配行 */
 function findContextRelativeMatch(
 	lines: string[],
 	patternLine: string,
@@ -598,6 +622,7 @@ const AMBIGUITY_HINT_WINDOW = 200;
 const MATCH_PREVIEW_CONTEXT = 2;
 const MATCH_PREVIEW_MAX_LEN = 80;
 
+/** 格式化序列匹配预览（带上下文行） */
 function formatSequenceMatchPreview(lines: string[], startIdx: number): string {
 	const start = Math.max(0, startIdx - MATCH_PREVIEW_CONTEXT);
 	const end = Math.min(lines.length, startIdx + MATCH_PREVIEW_CONTEXT + 1);
@@ -611,6 +636,7 @@ function formatSequenceMatchPreview(lines: string[], startIdx: number): string {
 		.join("\n");
 }
 
+/** 格式化多个序列匹配预览 */
 function formatSequenceMatchPreviews(
 	lines: string[],
 	matchIndices: number[] | undefined,
@@ -623,6 +649,7 @@ function formatSequenceMatchPreviews(
 	return `${previews.join("\n\n")}${moreMsg}`;
 }
 
+/** 从行号提示窗口内选择匹配 */
 function chooseHintedMatch(
 	matchIndices: number[] | undefined,
 	hintIndex: number | undefined,
@@ -634,6 +661,7 @@ function chooseHintedMatch(
 	return undefined;
 }
 
+/** 从块的行号获取提示索引 */
 /** Get hint index from hunk's line number */
 function getHunkHintIndex(hunk: DiffHunk, currentIndex: number): number | undefined {
 	if (hunk.oldStartLine === undefined) return undefined;
@@ -642,6 +670,13 @@ function getHunkHintIndex(hunk: DiffHunk, currentIndex: number): number | undefi
 }
 
 /**
+ * 在文件行中查找层级上下文。
+ *
+ * 处理三种格式：
+ * 1. 简单上下文："function foo" - 查找此行
+ * 2. 层级（换行）："class Foo\nmethod" - 先找 class，再在其后找 method
+ * 3. 层级（空格）："class Foo method" - 先尝试字面量，再拆分搜索
+ *
  * Find hierarchical context in file lines.
  *
  * Handles three formats:
@@ -814,6 +849,7 @@ function findHierarchicalContext(
 	return result;
 }
 
+/** 使用可选的提示位置查找序列，返回完整搜索结果 */
 /** Find sequence with optional hint position, returning full search result */
 function findSequenceWithHint(
 	lines: string[],
@@ -862,6 +898,7 @@ function findSequenceWithHint(
 	return primaryResult;
 }
 
+/** 尝试序列回退匹配 */
 function attemptSequenceFallback(
 	lines: string[],
 	hunk: DiffHunk,
@@ -909,6 +946,9 @@ function attemptSequenceFallback(
 }
 
 /**
+ * 使用基于字符的模糊匹配应用差异块。
+ * 当块仅包含 -/+ 行而无上下文行时使用。
+ *
  * Apply a hunk using character-based fuzzy matching.
  * Used when the hunk contains only -/+ lines without context.
  */
@@ -988,6 +1028,7 @@ function applyCharacterMatch(
 	return { content: before + adjustedNewText + after, warnings };
 }
 
+/** 应用尾部换行符策略（保持原文件的尾部换行状态） */
 function applyTrailingNewlinePolicy(content: string, hadFinalNewline: boolean): string {
 	if (hadFinalNewline) {
 		return content.endsWith("\n") ? content : `${content}\n`;
@@ -995,6 +1036,7 @@ function applyTrailingNewlinePolicy(content: string, hadFinalNewline: boolean): 
 	return content.replace(/\n+$/u, "");
 }
 
+/** 读取已有的补丁文件内容 */
 async function readExistingPatchFile(fileSystem: FileSystem, absolutePath: string, path: string): Promise<string> {
 	try {
 		return await fileSystem.read(absolutePath);
@@ -1007,6 +1049,8 @@ async function readExistingPatchFile(fileSystem: FileSystem, absolutePath: strin
 }
 
 /**
+ * 计算使用差异块转换原始行所需的替换操作。
+ *
  * Compute replacements needed to transform originalLines using the diff hunks.
  */
 function computeReplacements(
@@ -1336,12 +1380,14 @@ function computeReplacements(
 }
 
 /**
+ * 将替换操作应用到行数组，返回修改后的内容。
+ *
  * Apply replacements to lines, returning the modified content.
  */
 function applyReplacements(lines: string[], replacements: Replacement[]): string[] {
 	const result = [...lines];
 
-	// Apply in reverse order to maintain indices
+	// 逆序应用以保持索引正确性
 	for (let i = replacements.length - 1; i >= 0; i--) {
 		const { startIndex, oldLen, newLines } = replacements[i];
 		result.splice(startIndex, oldLen);
@@ -1352,6 +1398,8 @@ function applyReplacements(lines: string[], replacements: Replacement[]): string
 }
 
 /**
+ * 将差异块应用到文件内容。
+ *
  * Apply diff hunks to file content.
  */
 function applyHunksToContent(
@@ -1490,7 +1538,7 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 	if (!bom && fs.readBinary) {
 		const bytes = await fs.readBinary(absolutePath);
 		if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-			bom = "\uFEFF";
+			bom = "﻿";
 		}
 	}
 	const lineEnding = detectLineEnding(strippedContent);
@@ -1787,3 +1835,4 @@ export async function executePatchSingle(
 		},
 	};
 }
+

@@ -1,4 +1,9 @@
+
 /**
+ * 编辑工具的文本标准化工具集。
+ *
+ * 处理行尾符、BOM、空白字符和 Unicode 标准化。
+ *
  * Text normalization utilities for the edit tool.
  *
  * Handles line endings, BOM, whitespace, and Unicode normalization.
@@ -7,11 +12,13 @@
 import { padding } from "@oh-my-pi/pi-tui";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Line Ending Utilities
+// 行尾符工具
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 行尾符类型 */
 export type LineEnding = "\r\n" | "\n";
 
+/** 检测内容中主要使用的行尾符 */
 /** Detect the predominant line ending in content */
 export function detectLineEnding(content: string): LineEnding {
 	const crlfIdx = content.indexOf("\r\n");
@@ -21,36 +28,43 @@ export function detectLineEnding(content: string): LineEnding {
 	return crlfIdx < lfIdx ? "\r\n" : "\n";
 }
 
+/** 将所有行尾符统一为 LF */
 /** Normalize all line endings to LF */
 export function normalizeToLF(text: string): string {
 	return text.replace(/\r\n?/g, "\n");
 }
 
+/** 将行尾符恢复为指定类型 */
 /** Restore line endings to the specified type */
 export function restoreLineEndings(text: string, ending: LineEnding): string {
 	return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BOM Handling
+// BOM 处理
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** BOM 处理结果 */
 export interface BomResult {
+	/** BOM 字符（如存在），否则为空字符串 */
 	/** The BOM character if present, empty string otherwise */
 	bom: string;
+	/** 去除 BOM 后的文本 */
 	/** The text without the BOM */
 	text: string;
 }
 
+/** 去除 UTF-8 BOM（如存在） */
 /** Strip UTF-8 BOM if present */
 export function stripBom(content: string): BomResult {
-	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
+	return content.startsWith("﻿") ? { bom: "﻿", text: content.slice(1) } : { bom: "", text: content };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Whitespace Utilities
+// 空白字符工具
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 计算行首空白字符数量 */
 /** Count leading whitespace characters in a line */
 export function countLeadingWhitespace(line: string): number {
 	let count = 0;
@@ -65,15 +79,18 @@ export function countLeadingWhitespace(line: string): number {
 	return count;
 }
 
+/** 获取行首的空白字符串 */
 /** Get the leading whitespace string from a line */
 export function getLeadingWhitespace(line: string): string {
 	return line.slice(0, countLeadingWhitespace(line));
 }
 
+/** 判断行是否非空（含非空白字符） */
 function isNonEmptyLine(line: string): boolean {
 	return line.trim().length > 0;
 }
 
+/** 计算非空行的最小缩进量 */
 /** Compute minimum indentation of non-empty lines */
 export function minIndent(text: string): number {
 	const lines = text.split("\n");
@@ -86,6 +103,7 @@ export function minIndent(text: string): number {
 	return min === Infinity ? 0 : min;
 }
 
+/** 检测文本中使用的缩进字符（空格或制表符） */
 /** Detect the indentation character used in text (space or tab) */
 export function detectIndentChar(text: string): string {
 	const lines = text.split("\n");
@@ -98,6 +116,7 @@ export function detectIndentChar(text: string): string {
 	return " ";
 }
 
+/** 计算最大公约数 */
 function gcd(a: number, b: number): number {
 	let x = Math.abs(a);
 	let y = Math.abs(b);
@@ -109,6 +128,7 @@ function gcd(a: number, b: number): number {
 	return x;
 }
 
+/** 缩进分析结果 */
 interface IndentProfile {
 	lines: string[];
 	indentCounts: number[];
@@ -120,6 +140,7 @@ interface IndentProfile {
 	nonEmptyCount: number;
 }
 
+/** 构建文本的缩进分析结果 */
 function buildIndentProfile(text: string): IndentProfile {
 	const lines = text.split("\n");
 	const indentCounts: number[] = [];
@@ -179,6 +200,7 @@ function buildIndentProfile(text: string): IndentProfile {
 	};
 }
 
+/** 将行首制表符转换为空格 */
 export function convertLeadingTabsToSpaces(text: string, spacesPerTab: number): string {
 	if (spacesPerTab <= 0) return text;
 	return text
@@ -195,26 +217,28 @@ export function convertLeadingTabsToSpaces(text: string, spacesPerTab: number): 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Unicode Normalization
+// Unicode 标准化
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Unicode 字符替换映射表 */
 const UNICODE_REPLACEMENTS: [RegExp, string][] = [
-	// Various dash/hyphen code-points → ASCII '-'
-	[/[\u2010-\u2015\u2212]/g, "-"],
-	// Fancy single quotes → '
-	[/[\u2018-\u201B]/g, "'"],
-	// Fancy double quotes → "
-	[/[\u201C-\u201F]/g, '"'],
-	// Non-breaking space and other odd spaces → normal space
-	[/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " "],
-	// Not-equal sign → !=
-	[/\u2260/g, "!="],
-	// Vulgar fraction ½ → 1/2
-	[/\u00BD/g, "1/2"],
-	// Zero-width characters → remove
-	[/[\u200B-\u200D\uFEFF]/g, ""],
+	// 各种破折号/连字符码点 → ASCII '-'
+	[/[‐-―−]/g, "-"],
+	// 花式单引号 → '
+	[/[‘-‛]/g, "'"],
+	// 花式双引号 → "
+	[/[“-‟]/g, '"'],
+	// 不间断空格和其他特殊空格 → 普通空格
+	[/[  -   　]/g, " "],
+	// 不等号 → !=
+	[/≠/g, "!="],
+	// 分数 ½ → 1/2
+	[/½/g, "1/2"],
+	// 零宽字符 → 移除
+	[/[​-‍﻿]/g, ""],
 ];
 
+/** 标准化 Unicode 字符（替换花式标点、特殊空格等） */
 export function normalizeUnicode(s: string): string {
 	let result = s.trim();
 	for (const [pattern, replacement] of UNICODE_REPLACEMENTS) {
@@ -224,6 +248,9 @@ export function normalizeUnicode(s: string): string {
 }
 
 /**
+ * 标准化行用于模糊比较。
+ * 去除首尾空白、合并连续空白、标准化标点符号。
+ *
  * Normalize a line for fuzzy comparison.
  * Trims, collapses whitespace, and normalizes punctuation.
  */
@@ -238,6 +265,7 @@ export function normalizeForFuzzy(line: string): string {
 		.replace(/[ \t]+/g, " ");
 }
 
+/** 判断是否仅是缩进变更（去除空白后内容相同） */
 function isIndentationOnlyRewrite(oldText: string, newText: string): boolean {
 	const oldLines = oldText.split("\n");
 	const newLines = newText.split("\n");
@@ -252,6 +280,7 @@ function isIndentationOnlyRewrite(oldText: string, newText: string): boolean {
 	return true;
 }
 
+/** 尝试将制表符缩进转换为空格缩进（当模式匹配时） */
 function maybeConvertTabIndentation(
 	oldProfile: IndentProfile,
 	actualProfile: IndentProfile,
@@ -278,6 +307,7 @@ function maybeConvertTabIndentation(
 	return convertLeadingTabsToSpaces(newText, actualProfile.unit);
 }
 
+/** 计算统一的缩进偏移量（所有行的缩进差相同时） */
 function computeUniformIndentDelta(oldProfile: IndentProfile, actualProfile: IndentProfile): number | undefined {
 	const lineCount = Math.min(oldProfile.lines.length, actualProfile.lines.length);
 	const deltas: number[] = [];
@@ -296,6 +326,7 @@ function computeUniformIndentDelta(oldProfile: IndentProfile, actualProfile: Ind
 	return deltas.every(value => value === delta) ? delta : undefined;
 }
 
+/** 将缩进偏移量应用到文本的每一行 */
 function applyIndentDelta(text: string, delta: number, indentChar: string): string {
 	const adjusted = text.split("\n").map(line => {
 		if (!isNonEmptyLine(line)) {
@@ -311,19 +342,27 @@ function applyIndentDelta(text: string, delta: number, indentChar: string): stri
 	return adjusted.join("\n");
 }
 
+/** 检查所有缩进分析是否都包含非空行 */
 function hasNonEmptyIndentProfiles(...profiles: IndentProfile[]): boolean {
 	return profiles.every(profile => profile.nonEmptyCount > 0);
 }
 
+/** 检查是否存在混合缩进（空格和制表符混用） */
 function hasMixedIndentation(...profiles: IndentProfile[]): boolean {
 	return profiles.some(profile => profile.mixed);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Indentation Adjustment
+// 缩进调整
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * 调整 newText 的缩进，使其匹配提供内容（oldText）和实际匹配内容（actualText）
+ * 之间的缩进差异。
+ *
+ * 例如，如果 oldText 缩进为 0 但 actualText 有 12 个空格，
+ * 则给 newText 的每一行添加 12 个空格。
+ *
  * Adjust newText indentation to match the indentation delta between
  * what was provided (oldText) and what was actually matched (actualText).
  *
@@ -331,12 +370,12 @@ function hasMixedIndentation(...profiles: IndentProfile[]): boolean {
  * to each line in newText.
  */
 export function adjustIndentation(oldText: string, actualText: string, newText: string): string {
-	// If old text already matches actual text exactly, preserve agent's intended indentation
+	// 如果旧文本与实际文本完全匹配，保持 agent 预期的缩进
 	if (oldText === actualText) {
 		return newText;
 	}
 
-	// If the patch is purely an indentation change (same trimmed content), apply exactly as specified
+	// 如果补丁仅为缩进更改（去空白后内容相同），按原样应用
 	if (isIndentationOnlyRewrite(oldText, newText)) {
 		return newText;
 	}
@@ -373,3 +412,4 @@ export function adjustIndentation(oldText: string, actualText: string, newText: 
 	const indentChar = actualProfile.char ?? oldProfile.char ?? detectIndentChar(actualText);
 	return applyIndentDelta(newText, delta, indentChar);
 }
+

@@ -1,8 +1,13 @@
+
 /**
  * Fuzzy matching utilities for the edit tool.
  *
  * Provides both character-level and line-level fuzzy matching with progressive
  * fallback strategies for finding text in files.
+ *
+ * 编辑工具的模糊匹配工具集。
+ *
+ * 提供字符级和行级模糊匹配，支持渐进式回退策略在文件中查找文本。
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import * as z from "zod/v4";
@@ -24,53 +29,81 @@ import {
 import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 
+/** 模糊匹配结果 */
 export interface FuzzyMatch {
+	/** 实际匹配到的文本 */
 	actualText: string;
+	/** 匹配起始字符索引 */
 	startIndex: number;
+	/** 匹配起始行号 */
 	startLine: number;
+	/** 匹配置信度（0 到 1） */
 	confidence: number;
 }
 
+/** 匹配结果，包含成功匹配、最近似匹配及歧义信息 */
 export interface MatchOutcome {
+	/** 成功匹配的结果 */
 	match?: FuzzyMatch;
+	/** 最接近的匹配（即使未达到阈值） */
 	closest?: FuzzyMatch;
+	/** 精确匹配的出现次数（用于检测歧义） */
 	occurrences?: number;
+	/** 各出现位置的行号 */
 	occurrenceLines?: number[];
+	/** 各出现位置的上下文预览 */
 	occurrencePreviews?: string[];
+	/** 模糊匹配达到阈值的数量 */
 	fuzzyMatches?: number;
+	/** 是否存在显著优于其他候选的主导模糊匹配 */
 	dominantFuzzy?: boolean;
 }
 
+/** 序列匹配策略类型，按严格度从高到低排列 */
 export type SequenceMatchStrategy =
-	| "exact"
-	| "trim-trailing"
-	| "trim"
-	| "comment-prefix"
-	| "unicode"
-	| "prefix"
-	| "substring"
-	| "fuzzy"
-	| "fuzzy-dominant"
-	| "character";
+	| "exact" // 精确匹配
+	| "trim-trailing" // 忽略尾部空白
+	| "trim" // 忽略首尾空白
+	| "comment-prefix" // 忽略注释前缀
+	| "unicode" // Unicode 标点归一化
+	| "prefix" // 前缀匹配
+	| "substring" // 子串匹配
+	| "fuzzy" // 模糊相似度匹配
+	| "fuzzy-dominant" // 主导模糊匹配（显著优于次优）
+	| "character"; // 字符级模糊匹配（最终回退）
 
+/** 序列搜索结果 */
 export interface SequenceSearchResult {
+	/** 匹配起始行索引，未找到时为 undefined */
 	index: number | undefined;
+	/** 匹配置信度 */
 	confidence: number;
+	/** 匹配数量（大于 1 表示歧义） */
 	matchCount?: number;
+	/** 各匹配位置的行索引（诊断用） */
 	matchIndices?: number[];
+	/** 使用的匹配策略 */
 	strategy?: SequenceMatchStrategy;
 }
 
+/** 上下文行匹配策略类型 */
 export type ContextMatchStrategy = "exact" | "trim" | "unicode" | "prefix" | "substring" | "fuzzy";
 
+/** 上下文行搜索结果 */
 export interface ContextLineResult {
+	/** 匹配行索引，未找到时为 undefined */
 	index: number | undefined;
+	/** 匹配置信度 */
 	confidence: number;
+	/** 匹配数量 */
 	matchCount?: number;
+	/** 各匹配位置的行索引 */
 	matchIndices?: number[];
+	/** 使用的匹配策略 */
 	strategy?: ContextMatchStrategy;
 }
 
+/** 编辑匹配错误，当无法在文件中找到匹配文本时抛出 */
 export class EditMatchError extends Error {
 	constructor(
 		readonly path: string,
@@ -82,6 +115,7 @@ export class EditMatchError extends Error {
 		this.name = "EditMatchError";
 	}
 
+	/** 格式化错误消息，包含最近似匹配的差异信息 */
 	static formatMessage(
 		path: string,
 		searchText: string,
@@ -119,6 +153,7 @@ export class EditMatchError extends Error {
 	}
 }
 
+/** 找到两组行中第一个不同的行，用于错误消息中展示差异 */
 function findFirstDifferentLine(oldLines: string[], newLines: string[]): { oldLine: string; newLine: string } {
 	const max = Math.max(oldLines.length, newLines.length);
 	for (let i = 0; i < max; i++) {
@@ -131,6 +166,7 @@ function findFirstDifferentLine(oldLines: string[], newLines: string[]): { oldLi
 	return { oldLine: oldLines[0] ?? "", newLine: newLines[0] ?? "" };
 }
 
+/** 格式化多处匹配的歧义错误消息，提示用户添加更多上下文以消除歧义 */
 function formatOccurrenceError(path: string, matchOutcome: MatchOutcome): string {
 	const previews = matchOutcome.occurrencePreviews?.join("\n\n") ?? "";
 	const moreMsg =
@@ -141,53 +177,72 @@ function formatOccurrenceError(path: string, matchOutcome: MatchOutcome): string
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Constants
+// 常量
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Default similarity threshold for fuzzy matching */
+/** 模糊匹配的默认相似度阈值 */
 export const DEFAULT_FUZZY_THRESHOLD = 0.95;
 
 /** Threshold for sequence-based fuzzy matching */
+/** 序列模糊匹配的相似度阈值 */
 const SEQUENCE_FUZZY_THRESHOLD = 0.92;
 
 /** Fallback threshold for line-based matching */
+/** 行级匹配的回退阈值 */
 const FALLBACK_THRESHOLD = 0.8;
 
 /** Threshold for context line matching */
+/** 上下文行匹配的模糊阈值 */
 const CONTEXT_FUZZY_THRESHOLD = 0.8;
 
 /** Minimum length for partial/substring matching */
+/** 部分/子串匹配的最小长度 */
 const PARTIAL_MATCH_MIN_LENGTH = 6;
 
 /** Minimum ratio of pattern to line length for substring match */
+/** 子串匹配时模式与行长度的最小比率 */
 const PARTIAL_MATCH_MIN_RATIO = 0.3;
 
 /** Context lines to show before/after an ambiguous match preview */
+/** 歧义匹配预览中前后显示的上下文行数 */
 const OCCURRENCE_PREVIEW_CONTEXT = 5;
 
 /** Maximum line length for ambiguous match previews */
+/** 歧义匹配预览的最大行长度 */
 const OCCURRENCE_PREVIEW_MAX_LEN = 80;
 
 /** Maximum number of match indices or previews to retain for diagnostics */
+/** 诊断信息中保留的最大匹配索引或预览数量 */
 const MAX_RECORDED_MATCHES = 5;
 
 /** Minimum confidence for a dominant fuzzy match to be auto-selected */
+/** 主导模糊匹配被自动选中的最低置信度 */
 const DOMINANT_FUZZY_MIN_CONFIDENCE = 0.97;
 
 /** Minimum score gap between the best and second-best fuzzy matches */
+/** 最优与次优模糊匹配之间的最小分差 */
 const DOMINANT_FUZZY_DELTA = 0.08;
 
+/** 索引化匹配结果集合 */
 interface IndexedMatches {
+	/** 第一个匹配的索引 */
 	firstMatch: number | undefined;
+	/** 匹配总数 */
 	matchCount: number;
+	/** 匹配索引列表（最多保留 MAX_RECORDED_MATCHES 个） */
 	matchIndices: number[];
 }
 
+/** 预览窗口配置选项 */
 interface PreviewWindowOptions {
+	/** 上下文行数 */
 	context: number;
+	/** 每行最大长度 */
 	maxLen: number;
 }
 
+/** 在指定范围内收集所有满足谓词的匹配索引 */
 function collectIndexedMatches(
 	start: number,
 	endInclusive: number,
@@ -211,6 +266,7 @@ function collectIndexedMatches(
 	return { firstMatch, matchCount, matchIndices };
 }
 
+/** 将索引化匹配转换为单一匹配结果（仅当恰好有一个匹配时返回） */
 function toSingleMatchResult<TStrategy extends SequenceMatchStrategy | ContextMatchStrategy>(
 	matches: IndexedMatches,
 	confidence: number,
@@ -226,6 +282,7 @@ function toSingleMatchResult<TStrategy extends SequenceMatchStrategy | ContextMa
 	};
 }
 
+/** 将索引化匹配转换为可能包含歧义信息的匹配结果 */
 function toAmbiguousMatchResult<TStrategy extends SequenceMatchStrategy | ContextMatchStrategy>(
 	matches: IndexedMatches,
 	confidence: number,
@@ -243,6 +300,7 @@ function toAmbiguousMatchResult<TStrategy extends SequenceMatchStrategy | Contex
 	};
 }
 
+/** 格式化以指定行为中心的预览窗口，带行号和截断处理 */
 function formatPreviewWindow(lines: string[], centerIndex: number, options: PreviewWindowOptions): string {
 	const start = Math.max(0, centerIndex - options.context);
 	const end = Math.min(lines.length, centerIndex + options.context + 1);
@@ -256,6 +314,7 @@ function formatPreviewWindow(lines: string[], centerIndex: number, options: Prev
 		.join("\n");
 }
 
+/** 查找精确匹配结果；若存在多处匹配则返回歧义信息 */
 function findExactMatchOutcome(content: string, target: string): MatchOutcome | undefined {
 	const exactIndex = content.indexOf(target);
 	if (exactIndex === -1) {
@@ -298,10 +357,11 @@ function findExactMatchOutcome(content: string, target: string): MatchOutcome | 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Core Algorithms
+// 核心算法
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Compute Levenshtein distance between two strings */
+/** 计算两个字符串之间的 Levenshtein 编辑距离 */
 export function levenshteinDistance(a: string, b: string): number {
 	if (a === b) return 0;
 	const aLen = a.length;
@@ -309,6 +369,7 @@ export function levenshteinDistance(a: string, b: string): number {
 	if (aLen === 0) return bLen;
 	if (bLen === 0) return aLen;
 
+	// 使用两行滚动数组优化空间复杂度为 O(n)
 	let prev = new Array<number>(bLen + 1);
 	let curr = new Array<number>(bLen + 1);
 	for (let j = 0; j <= bLen; j++) {
@@ -320,11 +381,12 @@ export function levenshteinDistance(a: string, b: string): number {
 		const aCode = a.charCodeAt(i - 1);
 		for (let j = 1; j <= bLen; j++) {
 			const cost = aCode === b.charCodeAt(j - 1) ? 0 : 1;
-			const deletion = prev[j] + 1;
-			const insertion = curr[j - 1] + 1;
-			const substitution = prev[j - 1] + cost;
+			const deletion = prev[j] + 1; // 删除操作
+			const insertion = curr[j - 1] + 1; // 插入操作
+			const substitution = prev[j - 1] + cost; // 替换操作
 			curr[j] = Math.min(deletion, insertion, substitution);
 		}
+		// 交换前后行数组引用
 		const tmp = prev;
 		prev = curr;
 		curr = tmp;
@@ -334,6 +396,7 @@ export function levenshteinDistance(a: string, b: string): number {
 }
 
 /** Compute similarity score between two strings (0 to 1) */
+/** 计算两个字符串之间的相似度分数（0 到 1） */
 export function similarity(a: string, b: string): number {
 	if (a.length === 0 && b.length === 0) return 1;
 	const maxLen = Math.max(a.length, b.length);
@@ -343,10 +406,11 @@ export function similarity(a: string, b: string): number {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Line-Based Utilities
+// 行级工具函数
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Compute relative indent depths for lines */
+/** 计算各行的相对缩进深度，用于归一化比较时保留结构信息 */
 function computeRelativeIndentDepths(lines: string[]): number[] {
 	const indents = lines.map(countLeadingWhitespace);
 	const nonEmptyIndents: number[] = [];
@@ -368,6 +432,7 @@ function computeRelativeIndentDepths(lines: string[]): number[] {
 }
 
 /** Normalize lines for matching, optionally including indent depth */
+/** 归一化行内容用于匹配比较，可选包含缩进深度前缀 */
 function normalizeLines(lines: string[], includeDepth = true): string[] {
 	const indentDepths = includeDepth ? computeRelativeIndentDepths(lines) : null;
 	return lines.map((line, index) => {
@@ -379,6 +444,7 @@ function normalizeLines(lines: string[], includeDepth = true): string[] {
 }
 
 /** Compute character offsets for each line in content */
+/** 计算内容中每行的字符偏移量 */
 function computeLineOffsets(lines: string[]): number[] {
 	const offsets: number[] = [];
 	let offset = 0;
@@ -391,15 +457,20 @@ function computeLineOffsets(lines: string[]): number[] {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Character-Level Fuzzy Match (for replace mode)
+// 字符级模糊匹配（用于替换模式）
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** 最佳模糊匹配搜索结果 */
 interface BestFuzzyMatchResult {
+	/** 最佳匹配 */
 	best?: FuzzyMatch;
+	/** 超过阈值的匹配数量 */
 	aboveThresholdCount: number;
+	/** 次优匹配的分数 */
 	secondBestScore: number;
 }
 
+/** 模糊匹配核心实现：滑动窗口逐行比较，找出最佳匹配位置 */
 function findBestFuzzyMatchCore(
 	contentLines: string[],
 	targetLines: string[],
@@ -444,6 +515,7 @@ function findBestFuzzyMatchCore(
 	return { best, aboveThresholdCount, secondBestScore };
 }
 
+/** 在内容中查找与目标文本最佳的模糊匹配，支持缩进深度回退 */
 function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
 	const contentLines = content.split("\n");
 	const targetLines = target.split("\n");
@@ -458,7 +530,7 @@ function findBestFuzzyMatch(content: string, target: string, threshold: number):
 	const offsets = computeLineOffsets(contentLines);
 	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true);
 
-	// Retry without indent depth if match is close but below threshold
+	// 如果匹配接近但低于阈值，尝试不使用缩进深度重新匹配
 	if (result.best && result.best.confidence < threshold && result.best.confidence >= FALLBACK_THRESHOLD) {
 		const noDepthResult = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, false);
 		if (noDepthResult.best && noDepthResult.best.confidence > result.best.confidence) {
@@ -472,6 +544,9 @@ function findBestFuzzyMatch(content: string, target: string, threshold: number):
 /**
  * Find a match for target text within content.
  * Used primarily for replace-mode edits.
+ *
+ * 在内容中查找目标文本的匹配。
+ * 主要用于替换模式编辑。先尝试精确匹配，失败后回退到模糊匹配。
  */
 export function findMatch(
 	content: string,
@@ -487,7 +562,7 @@ export function findMatch(
 		return exactMatch;
 	}
 
-	// Try fuzzy match
+	// 尝试模糊匹配
 	const threshold = options.threshold ?? DEFAULT_FUZZY_THRESHOLD;
 	const { best, aboveThresholdCount, secondBestScore } = findBestFuzzyMatch(content, target, threshold);
 
@@ -512,10 +587,11 @@ export function findMatch(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Line-Based Sequence Match (for patch mode)
+// 行级序列匹配（用于补丁模式）
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Check if pattern matches lines starting at index using comparison function */
+/** 检查从指定索引开始的行是否与模式匹配（使用给定的比较函数） */
 function matchesAt(lines: string[], pattern: string[], i: number, compare: (a: string, b: string) => boolean): boolean {
 	for (let j = 0; j < pattern.length; j++) {
 		if (!compare(lines[i + j], pattern[j])) {
@@ -526,6 +602,7 @@ function matchesAt(lines: string[], pattern: string[], i: number, compare: (a: s
 }
 
 /** Compute average similarity score for pattern at position */
+/** 计算指定位置处模式的平均相似度分数 */
 function fuzzyScoreAt(lines: string[], pattern: string[], i: number): number {
 	let totalScore = 0;
 	for (let j = 0; j < pattern.length; j++) {
@@ -537,6 +614,7 @@ function fuzzyScoreAt(lines: string[], pattern: string[], i: number): number {
 }
 
 /** Check if line starts with pattern (normalized) */
+/** 检查行是否以模式开头（归一化后比较） */
 function lineStartsWithPattern(line: string, pattern: string): boolean {
 	const lineNorm = normalizeForFuzzy(line);
 	const patternNorm = normalizeForFuzzy(pattern);
@@ -545,6 +623,7 @@ function lineStartsWithPattern(line: string, pattern: string): boolean {
 }
 
 /** Check if line contains pattern as significant substring */
+/** 检查行是否包含模式作为有意义的子串（需满足最小长度和比率要求） */
 function lineIncludesPattern(line: string, pattern: string): boolean {
 	const lineNorm = normalizeForFuzzy(line);
 	const patternNorm = normalizeForFuzzy(pattern);
@@ -554,6 +633,7 @@ function lineIncludesPattern(line: string, pattern: string): boolean {
 	return patternNorm.length / Math.max(1, lineNorm.length) >= PARTIAL_MATCH_MIN_RATIO;
 }
 
+/** 去除行首的注释前缀（支持 //, /*, *, #, ; 等多种注释风格） */
 function stripCommentPrefix(line: string): string {
 	let trimmed = line.trimStart();
 	if (trimmed.startsWith("/*")) {
@@ -586,10 +666,21 @@ function stripCommentPrefix(line: string): string {
  * 6. Substring match (pattern is substring of line)
  * 7. Fuzzy similarity match
  *
- * @param lines - The lines of the file content
- * @param pattern - The lines to search for
- * @param start - Starting index for the search
- * @param eof - If true, prefer matching at end of file first
+ * 在内容行中查找模式行序列。
+ *
+ * 按严格度递减依次尝试匹配：
+ * 1. 精确匹配
+ * 2. 忽略尾部空白
+ * 3. 忽略全部首尾空白
+ * 4. Unicode 标点归一化
+ * 5. 前缀匹配（模式是行的前缀）
+ * 6. 子串匹配（模式是行的子串）
+ * 7. 模糊相似度匹配
+ *
+ * @param lines - 文件内容的行数组
+ * @param pattern - 要搜索的模式行
+ * @param start - 搜索起始索引
+ * @param eof - 若为 true，优先从文件末尾开始匹配
  */
 export function seekSequence(
 	lines: string[],
@@ -599,17 +690,17 @@ export function seekSequence(
 	options?: { allowFuzzy?: boolean },
 ): SequenceSearchResult {
 	const allowFuzzy = options?.allowFuzzy ?? true;
-	// Empty pattern matches immediately
+	// 空模式立即匹配
 	if (pattern.length === 0) {
 		return { index: start, confidence: 1.0, strategy: "exact" };
 	}
 
-	// Pattern longer than available content cannot match
+	// 模式长于可用内容，无法匹配
 	if (pattern.length > lines.length) {
 		return { index: undefined, confidence: 0 };
 	}
 
-	// Determine search start position
+	// 确定搜索起始位置
 	const searchStart = eof && lines.length >= pattern.length ? lines.length - pattern.length : start;
 	const maxStart = lines.length - pattern.length;
 
@@ -682,7 +773,7 @@ export function seekSequence(
 		return { index: undefined, confidence: 0 };
 	}
 
-	// Pass 7: Fuzzy matching - find best match above threshold
+	// 第 7 轮：模糊匹配 - 查找超过阈值的最佳匹配
 	let bestScore = 0;
 	let secondBestScore = 0;
 	let bestIndex: number | undefined;
@@ -716,7 +807,7 @@ export function seekSequence(
 
 	scoreFuzzyRange(searchStart, maxStart);
 
-	// Also search from start if eof mode started from end
+	// 如果 eof 模式从末尾开始搜索，也从起始位置搜索
 	if (eof && searchStart > start) {
 		scoreFuzzyRange(start, searchStart - 1);
 	}
@@ -744,8 +835,8 @@ export function seekSequence(
 		};
 	}
 
-	// Pass 8: Character-based fuzzy matching via findMatch
-	// This is the final fallback for when line-based matching fails
+	// 第 8 轮：通过 findMatch 进行字符级模糊匹配
+	// 这是行级匹配失败后的最终回退方案
 	const CHARACTER_MATCH_THRESHOLD = 0.92;
 	const patternText = pattern.join("\n");
 	const contentText = lines.slice(start).join("\n");
@@ -755,7 +846,7 @@ export function seekSequence(
 	});
 
 	if (matchOutcome.match) {
-		// Convert character index back to line index
+		// 将字符索引转换回行索引
 		const matchedContent = contentText.substring(0, matchOutcome.match.startIndex);
 		const lineIndex = start + matchedContent.split("\n").length - 1;
 		const fallbackMatchCount = matchOutcome.occurrences ?? matchOutcome.fuzzyMatches ?? 1;
@@ -771,6 +862,7 @@ export function seekSequence(
 	return { index: undefined, confidence: bestScore, matchCount: fallbackMatchCount };
 }
 
+/** 查找最接近的序列匹配位置，始终返回最佳模糊匹配结果（不要求达到阈值） */
 export function findClosestSequenceMatch(
 	lines: string[],
 	pattern: string[],
@@ -815,9 +907,12 @@ export function findClosestSequenceMatch(
 /**
  * Find a context line in the file using progressive matching strategies.
  *
- * @param lines - The lines of the file content
- * @param context - The context line to search for
- * @param startFrom - Starting index for the search
+ * 使用渐进式匹配策略在文件中查找上下文行。
+ * 依次尝试：精确 → 去空白 → Unicode 归一化 → 前缀 → 子串 → 模糊匹配。
+ *
+ * @param lines - 文件内容的行数组
+ * @param context - 要搜索的上下文行
+ * @param startFrom - 搜索起始索引
  */
 export function findContextLine(
 	lines: string[],
@@ -846,7 +941,7 @@ export function findContextLine(
 		}
 	}
 
-	// Pass 3: Unicode normalization match
+	// 第 3 轮：Unicode 归一化匹配
 	const normalizedContext = normalizeUnicode(context);
 	const unicodeMatches = collectIndexedMatches(
 		startFrom,
@@ -862,7 +957,7 @@ export function findContextLine(
 		return { index: undefined, confidence: 0 };
 	}
 
-	// Pass 4: Prefix match (file line starts with context)
+	// 第 4 轮：前缀匹配（文件行以上下文开头）
 	const contextNorm = normalizeForFuzzy(context);
 	if (contextNorm.length > 0) {
 		const prefixMatches = collectIndexedMatches(startFrom, endIndex, i =>
@@ -874,10 +969,10 @@ export function findContextLine(
 		}
 	}
 
-	// Pass 5: Substring match (file line contains context)
-	// First pass: find all substring matches (ignoring ratio)
-	// If exactly one match exists, accept it (uniqueness is sufficient)
-	// If multiple matches, apply ratio filter to disambiguate
+	// 第 5 轮：子串匹配（文件行包含上下文）
+	// 第一遍：查找所有子串匹配（忽略比率）
+	// 如果恰好一个匹配，直接接受（唯一性足够）
+	// 如果多个匹配，应用比率过滤以消除歧义
 	if (contextNorm.length >= PARTIAL_MATCH_MIN_LENGTH) {
 		const allSubstringMatches: Array<{ index: number; ratio: number }> = [];
 		for (let i = startFrom; i < lines.length; i++) {
@@ -889,7 +984,7 @@ export function findContextLine(
 		}
 		const matchIndices = allSubstringMatches.slice(0, 5).map(match => match.index);
 
-		// If exactly one substring match, accept it regardless of ratio
+		// 如果恰好一个子串匹配，无论比率如何都接受
 		if (allSubstringMatches.length === 1) {
 			return {
 				index: allSubstringMatches[0].index,
@@ -900,7 +995,7 @@ export function findContextLine(
 			};
 		}
 
-		// Multiple matches: filter by ratio to disambiguate
+		// 多个匹配：按比率过滤以消除歧义
 		let firstMatch: number | undefined;
 		let matchCount = 0;
 		for (const match of allSubstringMatches) {
@@ -913,8 +1008,8 @@ export function findContextLine(
 			return { index: firstMatch, confidence: 0.94, matchCount, matchIndices, strategy: "substring" };
 		}
 
-		// If we had substring matches but none passed ratio filter,
-		// return ambiguous result so caller knows matches exist
+		// 如果存在子串匹配但无一通过比率过滤，
+		// 返回歧义结果以告知调用方存在匹配
 		if (allSubstringMatches.length > 1) {
 			return {
 				index: allSubstringMatches[0].index,
@@ -926,7 +1021,7 @@ export function findContextLine(
 		}
 	}
 
-	// Pass 6: Fuzzy match using similarity
+	// 第 6 轮：使用相似度的模糊匹配
 	let bestIndex: number | undefined;
 	let bestScore = 0;
 	const fuzzyMatches: IndexedMatches = {
@@ -976,6 +1071,7 @@ export function findContextLine(
 	return { index: undefined, confidence: bestScore };
 }
 
+/** 单条替换编辑的参数 schema */
 export const replaceEditEntrySchema = z
 	.object({
 		old_text: z.string().describe("text to find"),
@@ -984,6 +1080,7 @@ export const replaceEditEntrySchema = z
 	})
 	.strict();
 
+/** 替换编辑操作的完整参数 schema（包含文件路径和编辑列表） */
 export const replaceEditSchema = z
 	.object({
 		path: z.string().describe("file path"),
@@ -991,9 +1088,12 @@ export const replaceEditSchema = z
 	})
 	.strict();
 
+/** 单条替换编辑条目的类型 */
 export type ReplaceEditEntry = z.infer<typeof replaceEditEntrySchema>;
+/** 替换编辑操作的完整参数类型 */
 export type ReplaceParams = z.infer<typeof replaceEditSchema>;
 
+/** 执行单次替换操作的选项 */
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;
 	path: string;
@@ -1006,6 +1106,10 @@ export interface ExecuteReplaceSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
+/**
+ * 执行单次文本替换操作。
+ * 读取文件内容，执行替换（支持精确和模糊匹配），写回文件并生成 diff 结果。
+ */
 export async function executeReplaceSingle(
 	options: ExecuteReplaceSingleOptions,
 ): Promise<AgentToolResult<EditToolDetails, typeof replaceEditEntrySchema>> {
@@ -1101,3 +1205,4 @@ export async function executeReplaceSingle(
 		},
 	};
 }
+

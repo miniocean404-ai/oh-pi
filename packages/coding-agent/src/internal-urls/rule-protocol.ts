@@ -1,12 +1,19 @@
+
 /**
  * Protocol handler for rule:// URLs.
  *
  * URL forms:
  * - rule://<name> - Reads rule content
+ *
+ * rule:// URL 协议处理器。
+ * URL 形式：rule://<name> 读取指定 rule 内容。
  */
 import { getActiveRules } from "../capability/rule";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
+/**
+ * rule:// URL 处理器：在当前活跃的 rules 中按名称查找并返回其内容。
+ */
 export class RuleProtocolHandler implements ProtocolHandler {
 	readonly scheme = "rule";
 	readonly immutable = true;
@@ -36,3 +43,4 @@ export class RuleProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

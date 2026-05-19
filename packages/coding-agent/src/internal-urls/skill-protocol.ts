@@ -1,3 +1,4 @@
+
 /**
  * Protocol handler for skill:// URLs.
  *
@@ -6,6 +7,12 @@
  * URL forms:
  * - skill://<name> - Reads SKILL.md
  * - skill://<name>/<path> - Reads relative path within skill's baseDir
+ *
+ * skill:// URL 协议处理器。
+ * 将 skill 名称解析为其 SKILL.md 文件，或解析为 skill 目录内的相对路径。
+ * URL 形式：
+ * - skill://<name>          读取 SKILL.md
+ * - skill://<name>/<path>   读取 skill baseDir 下的相对路径
  */
 import * as path from "node:path";
 import { getActiveSkills } from "../extensibility/skills";
@@ -19,6 +26,8 @@ function getContentType(filePath: string): InternalResource["contentType"] {
 
 /**
  * Validate that a path is safe (no traversal, no absolute paths).
+ *
+ * 校验给定路径是否安全：禁止路径穿越（..）与绝对路径。
  */
 export function validateRelativePath(relativePath: string): void {
 	if (path.isAbsolute(relativePath)) {
@@ -33,6 +42,8 @@ export function validateRelativePath(relativePath: string): void {
 
 /**
  * Handler for skill:// URLs.
+ *
+ * skill:// URL 处理器：在当前活跃的 skills 中按名称查找并读取相应文件。
  */
 export class SkillProtocolHandler implements ProtocolHandler {
 	readonly scheme = "skill";
@@ -87,3 +98,4 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

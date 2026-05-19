@@ -1,8 +1,17 @@
+
+/**
+ * Jupyter Notebook (.ipynb) 文件的处理工具。
+ *
+ * 提供 Notebook 的读取、解析、编辑和序列化功能，
+ * 支持将 Notebook 转换为可编辑的文本格式进行编辑。
+ */
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
+/** Notebook 单元格类型 */
 export type NotebookCellType = "code" | "markdown" | "raw";
 
+/** Notebook 单元格结构 */
 export interface NotebookCell {
 	cell_type: NotebookCellType;
 	source?: string | string[];
@@ -12,6 +21,7 @@ export interface NotebookCell {
 	[key: string]: unknown;
 }
 
+/** Notebook 文档结构 */
 export interface NotebookDocument {
 	cells: NotebookCell[];
 	metadata: Record<string, unknown>;
@@ -20,35 +30,43 @@ export interface NotebookDocument {
 	[key: string]: unknown;
 }
 
+/** 单元格标记正则表达式 */
 const CELL_MARKER_RE = /^# %% \[(code|markdown|raw)\](?: cell:(\d+))?$/;
 
+/** 判断文件路径是否为 Notebook 文件 (.ipynb) */
 export function isNotebookPath(filePath: string): boolean {
 	return path.extname(filePath).toLowerCase() === ".ipynb";
 }
 
+/** 判断值是否为普通对象 */
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 判断值是否为有效的单元格类型 */
 function isCellType(value: unknown): value is NotebookCellType {
 	return value === "code" || value === "markdown" || value === "raw";
 }
 
+/** 将单元格 source 字段转换为文本字符串 */
 function sourceToText(source: string | string[] | undefined): string {
 	if (source === undefined) return "";
 	if (typeof source === "string") return source;
 	return source.join("");
 }
 
+/** 将 Notebook 源内容拆分为行数组（保留行尾换行符） */
 export function splitNotebookSource(content: string): string[] {
 	if (content.length === 0) return [];
 	return content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
+/** 深拷贝单元格 */
 function cloneCell(cell: NotebookCell): NotebookCell {
 	return structuredClone(cell);
 }
 
+/** 创建新的 Notebook 单元格 */
 function createNotebookCell(cellType: NotebookCellType, source: string): NotebookCell {
 	const cell: NotebookCell = {
 		cell_type: cellType,
@@ -62,6 +80,7 @@ function createNotebookCell(cellType: NotebookCellType, source: string): Noteboo
 	return cell;
 }
 
+/** 创建空的 Notebook 文档 */
 function createEmptyNotebook(): NotebookDocument {
 	return {
 		cells: [],
@@ -71,6 +90,7 @@ function createEmptyNotebook(): NotebookDocument {
 	};
 }
 
+/** 验证 Notebook 文档结构的有效性 */
 function validateNotebook(value: unknown, displayPath: string): NotebookDocument {
 	if (!isRecord(value)) {
 		throw new Error(`Invalid notebook structure (expected object): ${displayPath}`);
@@ -87,6 +107,7 @@ function validateNotebook(value: unknown, displayPath: string): NotebookDocument
 	return value as unknown as NotebookDocument;
 }
 
+/** 读取并解析 Notebook 文档 */
 export async function readNotebookDocument(absolutePath: string, displayPath: string): Promise<NotebookDocument> {
 	try {
 		return validateNotebook(await Bun.file(absolutePath).json(), displayPath);
@@ -97,6 +118,7 @@ export async function readNotebookDocument(absolutePath: string, displayPath: st
 	}
 }
 
+/** 将 Notebook 文档转换为可编辑的文本表示 */
 export function notebookToEditableText(notebook: NotebookDocument): string {
 	return notebook.cells
 		.map((cell, index) => {
@@ -108,12 +130,14 @@ export function notebookToEditableText(notebook: NotebookDocument): string {
 		.join("\n");
 }
 
+/** 解析后的虚拟单元格 */
 interface ParsedVirtualCell {
 	cellType: NotebookCellType;
 	cellIndex?: number;
 	source: string;
 }
 
+/** 解析虚拟单元格标记行 */
 function parseVirtualCellMarker(line: string): { cellType: NotebookCellType; cellIndex?: number } | undefined {
 	const match = CELL_MARKER_RE.exec(line);
 	if (!match) return undefined;
@@ -125,11 +149,13 @@ function parseVirtualCellMarker(line: string): { cellType: NotebookCellType; cel
 	};
 }
 
+/** 将行数组合并为源文本 */
 function linesToSourceText(lines: string[]): string {
 	if (lines.length === 0) return "";
 	return lines.join("\n");
 }
 
+/** 解析可编辑文本格式为虚拟单元格数组 */
 function parseNotebookEditableText(text: string, displayPath: string): ParsedVirtualCell[] {
 	const lines = text.length === 0 ? [] : text.split("\n");
 	const cells: ParsedVirtualCell[] = [];
@@ -162,6 +188,7 @@ function parseNotebookEditableText(text: string, displayPath: string): ParsedVir
 	return cells;
 }
 
+/** 将编辑后的文本应用到 Notebook 文档，生成新的 Notebook */
 export function applyNotebookEditableText(
 	notebook: NotebookDocument,
 	text: string,
@@ -198,10 +225,12 @@ export function applyNotebookEditableText(
 	return nextNotebook;
 }
 
+/** 读取 Notebook 文件并返回可编辑文本格式 */
 export async function readEditableNotebookText(absolutePath: string, displayPath: string): Promise<string> {
 	return notebookToEditableText(await readNotebookDocument(absolutePath, displayPath));
 }
 
+/** 将编辑后的文本序列化为 Notebook JSON 格式 */
 export async function serializeEditedNotebookText(
 	absolutePath: string,
 	displayPath: string,
@@ -220,3 +249,4 @@ export async function serializeEditedNotebookText(
 	const nextNotebook = applyNotebookEditableText(notebook, text, displayPath);
 	return JSON.stringify(nextNotebook, null, 1);
 }
+

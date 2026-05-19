@@ -1,4 +1,15 @@
+
 /**
+ * 流式编辑预览策略。
+ *
+ * 每种编辑模式拥有一个策略，负责：
+ * - 将部分 JSON 参数折叠到可安全预览的子集（`extractCompleteEdits`）
+ * - 为正在传输的参数计算统一差异预览（`computeDiffPreview`）
+ * - 在差异尚未生成时渲染文本占位符（`renderStreamingFallback`）
+ *
+ * 共享渲染器 / `ToolExecutionComponent` 通过注入的 `editMode` 咨询策略，
+ * 而非探测参数形状。
+ *
  * Streaming edit preview strategies.
  *
  * Each edit mode owns a strategy that knows how to:
@@ -32,6 +43,7 @@ import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPrev
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
 
+/** 每个文件的差异预览 */
 export interface PerFileDiffPreview {
 	path: string;
 	diff?: string;
@@ -39,6 +51,7 @@ export interface PerFileDiffPreview {
 	error?: string;
 }
 
+/** 流式差异计算上下文 */
 export interface StreamingDiffContext {
 	cwd: string;
 	signal: AbortSignal;
@@ -47,19 +60,28 @@ export interface StreamingDiffContext {
 	hashlineAutoDropPureInsertDuplicates?: boolean;
 }
 
+/** 编辑流式预览策略接口 */
 export interface EditStreamingStrategy<Args = unknown> {
 	/**
+	 * 返回限制为"足够完整"以计算差异的参数。
+	 * 当 `partialJson` 表明尾部 `}` 尚未到达时，策略会丢弃末尾的不完整条目。
+	 *
 	 * Return the args restricted to edits that are "complete enough" to
 	 * compute a diff against. Strategies drop the trailing incomplete entry
 	 * when `partialJson` indicates its closing `}` hasn't arrived yet.
 	 */
 	extractCompleteEdits(args: Args, partialJson: string | undefined): Args;
 	/**
+	 * 为给定的部分参数计算差异。当参数结构不足以计算时返回 `null`。
+	 *
 	 * Compute diff(s) for the given partial args. Returns `null` when args
 	 * do not yet carry enough structure to compute anything.
 	 */
 	computeDiffPreview(args: Args, ctx: StreamingDiffContext): Promise<PerFileDiffPreview[] | null>;
 	/**
+	 * 在差异尚未计算时（或计算返回 `null` 因为参数仍然不完整时）
+	 * 内联渲染的占位内容。
+	 *
 	 * Rendered inline while the diff hasn't been computed yet (or when the
 	 * compute returned `null` because args are still too partial).
 	 */
@@ -69,16 +91,19 @@ export interface EditStreamingStrategy<Args = unknown> {
 const STREAMING_FALLBACK_LINES = 12;
 const STREAMING_FALLBACK_WIDTH = 80;
 
+/** 判断是否为 hashline 头部行 */
 function isHashlineHeaderLine(line: string): boolean {
 	const trimmed = line.trimEnd();
 	return trimmed.startsWith("@") && trimmed.length > 1;
 }
 
+/** 判断是否为 hashline 信封标记行 */
 function isHashlineEnvelopeMarkerLine(line: string): boolean {
 	const trimmed = line.trimEnd();
 	return trimmed === BEGIN_PATCH_MARKER || trimmed === END_PATCH_MARKER || trimmed === ABORT_MARKER;
 }
 
+/** 裁剪 hashline 流式语法标记 */
 function trimHashlineStreamingSyntax(lines: string[]): string[] {
 	let index = lines.findIndex(line => line.trim().length > 0);
 	if (index === -1) return [];
@@ -94,6 +119,7 @@ function trimHashlineStreamingSyntax(lines: string[]): string[] {
 	return lines.slice(index).filter(line => !isHashlineEnvelopeMarkerLine(line));
 }
 
+/** 渲染 hashline 输入的回退预览 */
 function renderHashlineInputFallback(input: string, uiTheme: Theme): string {
 	const lines = trimHashlineStreamingSyntax(sanitizeText(input).split("\n"));
 	if (!lines.some(line => line.trim().length > 0)) return "";
@@ -113,10 +139,17 @@ function renderHashlineInputFallback(input: string, uiTheme: Theme): string {
 }
 
 // -----------------------------------------------------------------------------
-// Partial-JSON handling
+// 部分 JSON 处理
 // -----------------------------------------------------------------------------
 
 /**
+ * 给定从部分 JSON 解析的编辑数组，当 `partialJson` 中对应的对象
+ * 尚未以闭合的 `}` 结束时，丢弃最后一个条目。
+ *
+ * 防止 `partial-json` 静默将截断的尾部（如 `"write":nu` / `"write":nul`）
+ * 强制转换为 `{ write: null }`，导致最后一个条目在值完成流式传输前
+ * 渲染出虚假的 null-write 错误。
+ *
  * Given an edits array parsed from partial JSON, drop the last entry when the
  * corresponding object in `partialJson` does not yet end with a closed `}`.
  *
@@ -185,9 +218,10 @@ export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: stri
 }
 
 // -----------------------------------------------------------------------------
-// Apply_patch remains multi-file because the Codex envelope carries paths per hunk.
+// apply_patch 保持多文件模式，因为 Codex 信封每个块携带路径。
 // -----------------------------------------------------------------------------
 
+/** 按文件路径分组 apply_patch 条目 */
 function groupApplyPatchEntriesByPath(entries: readonly ApplyPatchEntry[]): Map<string, ApplyPatchEntry[]> {
 	const groups = new Map<string, ApplyPatchEntry[]>();
 
@@ -203,7 +237,7 @@ function groupApplyPatchEntriesByPath(entries: readonly ApplyPatchEntry[]): Map<
 }
 
 // -----------------------------------------------------------------------------
-// Strategies
+// 策略实现
 // -----------------------------------------------------------------------------
 
 interface ReplaceArgs {
@@ -212,6 +246,7 @@ interface ReplaceArgs {
 	__partialJson?: string;
 }
 
+/** 替换模式的流式预览策略 */
 const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	extractCompleteEdits(args, partialJson) {
 		if (!args?.edits) return args;
@@ -245,6 +280,7 @@ interface PatchArgs {
 	__partialJson?: string;
 }
 
+/** 补丁模式的流式预览策略 */
 const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 	extractCompleteEdits(args, partialJson) {
 		if (!args?.edits) return args;
@@ -274,6 +310,7 @@ interface HashlineArgs {
 	__partialJson?: string;
 }
 
+/** hashline 模式的流式预览策略 */
 const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	extractCompleteEdits(args) {
 		return args;
@@ -333,9 +370,10 @@ interface ApplyPatchArgs {
 	input?: string;
 }
 
+/** apply_patch 模式的流式预览策略 */
 const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 	extractCompleteEdits(args) {
-		// Apply_patch payload is plain text, not an edits array. Nothing to trim.
+		// apply_patch 负载是纯文本而非编辑数组，无需裁剪
 		return args;
 	},
 	async computeDiffPreview(args, ctx) {
@@ -372,8 +410,8 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 	},
 };
 
-// Vim streaming preview is handled by the existing vimToolRenderer inside
-// edit/renderer.ts. The strategy here is a no-op so the registry is total.
+// Vim 流式预览由 edit/renderer.ts 中的 vimToolRenderer 处理。
+// 此处策略为空操作，确保注册表完整。
 const vimStrategy: EditStreamingStrategy<unknown> = {
 	extractCompleteEdits(args) {
 		return args;
@@ -386,6 +424,7 @@ const vimStrategy: EditStreamingStrategy<unknown> = {
 	},
 };
 
+/** 各编辑模式对应的流式预览策略注册表 */
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {
 	replace: replaceStrategy as EditStreamingStrategy<unknown>,
 	patch: patchStrategy as EditStreamingStrategy<unknown>,
@@ -397,12 +436,14 @@ export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknow
 export { resolveEditMode };
 
 // -----------------------------------------------------------------------------
-// Helpers
+// 辅助函数
 // -----------------------------------------------------------------------------
 
+/** 将差异结果转换为每文件预览格式 */
 function toPerFilePreview(path: string, result: DiffResult | DiffError): PerFileDiffPreview {
 	if ("error" in result) {
 		return { path, error: result.error };
 	}
 	return { path, diff: result.diff, firstChangedLine: result.firstChangedLine };
 }
+

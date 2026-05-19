@@ -1,3 +1,4 @@
+
 /**
  * Protocol handler for omp:// URLs.
  *
@@ -6,6 +7,12 @@
  * URL forms:
  * - omp:// - Lists all available documentation files
  * - omp://<file>.md - Reads a specific documentation file
+ *
+ * omp:// URL 协议处理器。
+ * 提供构建时静态打包进二进制的文档文件。
+ * URL 形式：
+ * - omp://             列出所有可用文档文件
+ * - omp://<file>.md    读取指定文档文件
  */
 import * as path from "node:path";
 import { EMBEDDED_DOC_FILENAMES, EMBEDDED_DOCS } from "./docs-index.generated";
@@ -15,6 +22,8 @@ import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
  * Handler for omp:// URLs.
  *
  * Resolves documentation file names to their content, or lists available docs.
+ *
+ * omp:// URL 处理器：将文档文件名解析为对应内容，或列出可用文档。
  */
 export class OmpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "omp";
@@ -81,3 +90,4 @@ export class OmpProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

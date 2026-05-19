@@ -1,3 +1,4 @@
+
 /**
  * LSP Tool TUI Rendering
  *
@@ -6,6 +7,12 @@
  * - Color-coded diagnostics by severity
  * - Grouped references and symbols
  * - Collapsible/expandable views
+ *
+ * LSP 工具的 TUI 渲染模块：
+ * - 语法高亮的悬停信息
+ * - 按严重级别着色的诊断信息
+ * - 分组的引用和符号
+ * - 可折叠/展开的视图
  */
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { type HighlightColors, highlightCode as nativeHighlightCode, supportsLanguage } from "@oh-my-pi/pi-natives";
@@ -25,17 +32,20 @@ import { CachedOutputBlock } from "../tui/output-block";
 import type { LspParams, LspToolDetails } from "./types";
 
 // =============================================================================
-// Call Rendering
+// 调用渲染
 // =============================================================================
 
 /**
  * Render the LSP tool call in the TUI.
  * Shows: "lsp <operation> <file/filecount>"
+ * 在 TUI 中渲染 LSP 工具调用
  */
+/** 清理内联文本（替换制表符和换行） */
 function sanitizeInlineText(value: string): string {
 	return replaceTabs(value).replaceAll(/\r?\n/g, " ");
 }
 
+/** 渲染 LSP 工具调用的状态行 */
 export function renderCall(args: LspParams, _options: RenderResultOptions, theme: Theme): Text {
 	const actionLabel = (args.action ?? "request").replace(/_/g, " ");
 	const queryPreview = args.query ? truncateToWidth(args.query, TRUNCATE_LENGTHS.SHORT) : undefined;
@@ -89,12 +99,13 @@ export function renderCall(args: LspParams, _options: RenderResultOptions, theme
 }
 
 // =============================================================================
-// Result Rendering
+// 结果渲染
 // =============================================================================
 
 /**
  * Render LSP tool result with intelligent formatting based on result type.
  * Detects hover, diagnostics, references, symbols, etc. and formats accordingly.
+ * 根据结果类型智能渲染 LSP 工具结果，自动检测并格式化悬停、诊断、引用、符号等。
  */
 export function renderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: LspToolDetails; isError?: boolean },
@@ -112,7 +123,7 @@ export function renderResult(
 	const text = content.text;
 	const lines = text.split("\n");
 
-	// Static type detection (result content doesn't change between renders)
+	// 静态类型检测（结果内容在渲染间不变）
 	const codeBlockMatch = text.match(/```(\w*)\n([\s\S]*?)```/);
 	const errorMatch = text.match(/(\d+)\s+error\(s\)/);
 	const warningMatch = text.match(/(\d+)\s+warning\(s\)/);
@@ -120,7 +131,7 @@ export function renderResult(
 	const symbolsMatch = text.match(/Symbols in (.+):/);
 	const hasStatusError = text.includes(theme.status.error);
 
-	// Static request info
+	// 静态请求信息
 	const request = args ?? result.details?.request;
 	const requestLines: string[] = [];
 	if (request?.file) {
@@ -140,7 +151,7 @@ export function renderResult(
 
 	return {
 		render(width: number): string[] {
-			// Read mutable state at render time
+			// 在渲染时读取可变状态
 			const { expanded, isPartial, spinnerFrame } = options;
 
 			// Determine label, state, bodyLines based on type + current expanded
@@ -198,11 +209,12 @@ export function renderResult(
 }
 
 // =============================================================================
-// Hover Rendering
+// 悬停信息渲染
 // =============================================================================
 
 /**
  * Render hover information with syntax-highlighted code blocks.
+ * 渲染语法高亮的悬停信息
  */
 function renderHover(
 	codeBlockMatch: RegExpMatchArray,
@@ -274,6 +286,7 @@ function renderHover(
 
 /**
  * Syntax highlight code using native highlighter.
+ * 使用原生高亮器对代码进行语法高亮
  */
 function highlightCode(codeText: string, language: string, theme: Theme): string[] {
 	const validLang = language && supportsLanguage(language) ? language : undefined;
@@ -298,9 +311,10 @@ function highlightCode(codeText: string, language: string, theme: Theme): string
 }
 
 // =============================================================================
-// Diagnostics Rendering
+// 诊断信息渲染
 // =============================================================================
 
+/** 格式化诊断位置（带语言图标） */
 function formatDiagnosticLocation(file: string, line: string | number, col: string | number, theme: Theme): string {
 	const lang = getLanguageFromPath(file);
 	const icon = theme.fg("muted", theme.getLangIcon(lang));
@@ -309,6 +323,7 @@ function formatDiagnosticLocation(file: string, line: string | number, col: stri
 
 /**
  * Render diagnostics with color-coded severity.
+ * 渲染按严重级别着色的诊断信息
  */
 function renderDiagnostics(
 	errorMatch: RegExpMatchArray | null,
@@ -398,11 +413,12 @@ function renderDiagnostics(
 }
 
 // =============================================================================
-// References Rendering
+// 引用渲染
 // =============================================================================
 
 /**
  * Render references grouped by file.
+ * 按文件分组渲染引用
  */
 function renderReferences(refMatch: RegExpMatchArray, lines: string[], expanded: boolean, theme: Theme): string[] {
 	const refCount = Number.parseInt(refMatch[1], 10);
@@ -485,11 +501,12 @@ function renderReferences(refMatch: RegExpMatchArray, lines: string[], expanded:
 }
 
 // =============================================================================
-// Symbols Rendering
+// 符号渲染
 // =============================================================================
 
 /**
  * Render document symbols in a hierarchical tree.
+ * 以层级树形式渲染文档符号
  */
 function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded: boolean, theme: Theme): string[] {
 	const fileName = symbolsMatch[1];
@@ -584,11 +601,12 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 }
 
 // =============================================================================
-// Generic Rendering
+// 通用渲染
 // =============================================================================
 
 /**
  * Generic fallback rendering for unknown result types.
+ * 未知结果类型的通用回退渲染
  */
 function renderGeneric(text: string, lines: string[], expanded: boolean, theme: Theme): string[] {
 	const hasError = text.includes("Error:") || text.includes(theme.status.error);
@@ -637,9 +655,10 @@ function renderGeneric(text: string, lines: string[], expanded: boolean, theme: 
 }
 
 // =============================================================================
-// Parsing Helpers
+// 解析辅助函数
 // =============================================================================
 
+/** 解析后的诊断信息 */
 interface ParsedDiagnostic {
 	file: string;
 	line: string;
@@ -648,16 +667,20 @@ interface ParsedDiagnostic {
 	message: string;
 }
 
+/** 原始诊断信息（未解析） */
 interface RawDiagnostic {
 	raw: string;
 }
 
+/** 诊断项（已解析或原始） */
 type DiagnosticItem = ParsedDiagnostic | RawDiagnostic;
 
+/** 清理诊断显示文本 */
 function sanitizeDiagnosticDisplayText(text: string): string {
 	return replaceTabs(text);
 }
 
+/** 解析诊断行文本 */
 function parseDiagnosticLine(line: string): ParsedDiagnostic | null {
 	const match = line.trim().match(/^(.*):(\d+):(\d+)\s+\[(\w+)\]\s*(.*)$/);
 	if (!match) return null;
@@ -671,6 +694,7 @@ function parseDiagnosticLine(line: string): ParsedDiagnostic | null {
 	};
 }
 
+/** 将严重级别映射为颜色名称 */
 function severityToColor(severity: string): "error" | "warning" | "accent" | "dim" {
 	switch (severity) {
 		case "error":
@@ -684,9 +708,11 @@ function severityToColor(severity: string): "error" | "warning" | "accent" | "di
 	}
 }
 
+/** LSP 工具渲染器配置 */
 export const lspToolRenderer = {
 	renderCall,
 	renderResult,
 	mergeCallAndResult: true,
 	inline: true,
 };
+

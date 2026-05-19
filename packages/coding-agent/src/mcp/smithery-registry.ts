@@ -1,8 +1,18 @@
+
+/**
+ * Smithery Registry.
+ * Smithery 注册表。
+ *
+ * Provides search and configuration for MCP servers from the Smithery registry.
+ * 提供从 Smithery 注册表搜索和配置 MCP 服务器的功能。
+ */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { MCPServerConfig } from "./types";
 
+/** Smithery 注册表基础 URL */
 const SMITHERY_REGISTRY_BASE_URL = "https://registry.smithery.ai";
 
+/** Smithery 搜索条目 */
 type SmitherySearchEntry = {
 	id?: string;
 	qualifiedName?: string;
@@ -21,18 +31,24 @@ type SmitherySearchEntry = {
 	iconUrl?: string;
 };
 
+/** Smithery 连接信息 */
 type SmitheryConnection = {
+	/** 连接类型 */
 	type?: "http" | "stdio";
+	/** 部署 URL */
 	deploymentUrl?: string;
+	/** 配置 schema */
 	configSchema?: SmitheryConfigSchema;
 };
 
+/** Smithery 配置 Schema */
 type SmitheryConfigSchema = {
 	type?: string;
 	required?: string[];
 	properties?: Record<string, SmitheryConfigProperty>;
 };
 
+/** Smithery 配置属性 */
 type SmitheryConfigProperty = {
 	type?: string;
 	description?: string;
@@ -41,6 +57,7 @@ type SmitheryConfigProperty = {
 	format?: string;
 };
 
+/** Smithery 服务器详情 */
 type SmitheryServerDetails = {
 	qualifiedName?: string;
 	displayName?: string;
@@ -52,6 +69,7 @@ type SmitheryServerDetails = {
 	tools?: unknown;
 };
 
+/** Smithery 工具定义 */
 type SmitheryToolDefinition = {
 	name?: string;
 	description?: string;
@@ -62,15 +80,24 @@ type SmitheryToolDefinition = {
 	};
 };
 
+/** 注册表输入类型 */
 type RegistryInputType = "string" | "number" | "boolean";
 
+/** Smithery 搜索结果 */
 export type SmitherySearchResult = {
+	/** 唯一标识 */
 	id: string;
+	/** 规范名称 */
 	name: string;
+	/** 显示标题 */
 	title?: string;
+	/** 描述 */
 	description?: string;
+	/** 搜索相关性评分 */
 	score?: number;
+	/** 使用次数 */
 	useCount?: number;
+	/** 显示信息 */
 	display: {
 		displayName: string;
 		description: string;
@@ -87,9 +114,13 @@ export type SmitherySearchResult = {
 			params: string[];
 		}>;
 	};
+	/** 来源类型：远程服务或本地包 */
 	sourceType: "remote" | "package";
+	/** MCP 服务器配置 */
 	config: MCPServerConfig;
+	/** 警告信息列表 */
 	warnings: string[];
+	/** 需要用户提供的输入参数 */
 	requiredInputs: Array<{
 		key: string;
 		label: string;
@@ -102,13 +133,19 @@ export type SmitherySearchResult = {
 	}>;
 };
 
+/** Smithery 搜索选项 */
 export interface SmitherySearchOptions {
+	/** 最大返回结果数 */
 	limit?: number;
+	/** API 密钥 */
 	apiKey?: string;
+	/** 是否包含语义搜索结果 */
 	includeSemantic?: boolean;
 }
 
+/** Smithery 注册表错误 */
 export class SmitheryRegistryError extends Error {
+	/** HTTP 状态码 */
 	status: number;
 
 	constructor(message: string, status: number) {
@@ -118,6 +155,7 @@ export class SmitheryRegistryError extends Error {
 	}
 }
 
+/** 将限制值钳制在 1-100 范围内 */
 function clampLimit(limit: number | undefined): number {
 	if (!limit || Number.isNaN(limit)) return 20;
 	if (limit < 1) return 1;
@@ -125,6 +163,7 @@ function clampLimit(limit: number | undefined): number {
 	return Math.trunc(limit);
 }
 
+/** 检查搜索条目是否匹配身份查询（按显示名或规范名） */
 function matchesIdentityQuery(query: string, entry: SmitherySearchEntry): boolean {
 	const normalizedQuery = query.trim().toLowerCase();
 	if (!normalizedQuery) return true;
@@ -133,6 +172,7 @@ function matchesIdentityQuery(query: string, entry: SmitherySearchEntry): boolea
 	return displayName.includes(normalizedQuery) || qualifiedName.includes(normalizedQuery);
 }
 
+/** 解析用于获取详情的路径候选列表 */
 function resolveDetailPathCandidates(entry: SmitherySearchEntry): string[] {
 	const candidates: string[] = [];
 	const pushUnique = (value: string | undefined): void => {
@@ -153,6 +193,7 @@ function resolveDetailPathCandidates(entry: SmitherySearchEntry): string[] {
 	return candidates;
 }
 
+/** 获取搜索条目的唯一身份键 */
 function getEntryIdentityKey(entry: SmitherySearchEntry): string | null {
 	const candidates = resolveDetailPathCandidates(entry);
 	if (candidates.length > 0) {
@@ -162,6 +203,7 @@ function getEntryIdentityKey(entry: SmitherySearchEntry): string | null {
 	return null;
 }
 
+/** 将规范名称转换为配置名称（小写、去除特殊字符） */
 function toConfigNameFromQualifiedName(qualifiedName: string): string {
 	const normalized = qualifiedName
 		.toLowerCase()
@@ -173,16 +215,19 @@ function toConfigNameFromQualifiedName(qualifiedName: string): string {
 	return normalized.length > 0 ? normalized : "mcp-server";
 }
 
+/** 规范化包名，确保以 @ 开头 */
 function normalizeQualifiedName(value: string): string {
 	return value.startsWith("@") ? value : `@${value}`;
 }
 
+/** 将标量值转换为字符串 */
 function scalarToString(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
 	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	return undefined;
 }
 
+/** 将任意值转换为字符串表示 */
 function unknownToString(value: unknown): string | undefined {
 	if (value === null || value === undefined) return undefined;
 	if (typeof value === "string") return value;
@@ -194,6 +239,7 @@ function unknownToString(value: unknown): string | undefined {
 	}
 }
 
+/** 安全地提取元数据值（清理空白字符） */
 function safeMetadataValue(value: unknown): string | undefined {
 	const raw = unknownToString(value);
 	if (!raw) return undefined;
@@ -204,6 +250,7 @@ function safeMetadataValue(value: unknown): string | undefined {
 	return normalized.length > 0 ? normalized : undefined;
 }
 
+/** 将日期字符串转换为 YYYY-MM-DD 格式的标签 */
 function toDateLabel(value: string | undefined): string | undefined {
 	if (!value) return undefined;
 	const date = new Date(value);
@@ -211,6 +258,7 @@ function toDateLabel(value: string | undefined): string | undefined {
 	return date.toISOString().slice(0, 10);
 }
 
+/** 从原始工具数据中提取工具列表 */
 function getToolsList(tools: unknown): SmitherySearchResult["display"]["tools"] {
 	if (!Array.isArray(tools)) return [];
 	const output: SmitherySearchResult["display"]["tools"] = [];
@@ -229,17 +277,20 @@ function getToolsList(tools: unknown): SmitherySearchResult["display"]["tools"] 
 	return output;
 }
 
+/** 将 JSON Schema 类型映射为注册表输入类型 */
 function getInputType(propertyType: string | undefined): RegistryInputType {
 	if (propertyType === "number" || propertyType === "integer") return "number";
 	if (propertyType === "boolean") return "boolean";
 	return "string";
 }
 
+/** 判断输入字段是否为敏感信息（如 API 密钥、令牌等） */
 function isSensitiveInput(key: string, format: string | undefined): boolean {
 	if (format?.toLowerCase() === "password") return true;
 	return /(api[_-]?key|token|secret|password)/i.test(key);
 }
 
+/** 从配置 Schema 中提取输入参数列表 */
 function getSchemaInputs(schema: SmitheryConfigSchema | undefined): SmitherySearchResult["requiredInputs"] {
 	const required = new Set(schema?.required ?? []);
 	const properties = schema?.properties ?? {};
@@ -265,6 +316,7 @@ function getSchemaInputs(schema: SmitheryConfigSchema | undefined): SmitherySear
 	return inputs;
 }
 
+/** 选择最佳连接方式（优先使用无配置的 HTTP 直连，其次 stdio，最后带配置的 HTTP） */
 function chooseConnection(
 	details: SmitheryServerDetails,
 ): { connection: SmitheryConnection; useDirectHttp: boolean } | null {
@@ -289,6 +341,7 @@ function chooseConnection(
 	return null;
 }
 
+/** 根据选定的连接方式创建 MCP 服务器配置 */
 function createConfig(
 	qualifiedName: string,
 	selected: { connection: SmitheryConnection; useDirectHttp: boolean },
@@ -307,6 +360,7 @@ function createConfig(
 	};
 }
 
+/** 从注册表获取服务器详情 */
 async function fetchServerDetails(path: string, options?: { apiKey?: string }): Promise<SmitheryServerDetails | null> {
 	const headers = new Headers();
 	if (options?.apiKey) {
@@ -319,6 +373,7 @@ async function fetchServerDetails(path: string, options?: { apiKey?: string }): 
 	return (await response.json()) as SmitheryServerDetails;
 }
 
+/** 从搜索条目中尝试多个候选路径获取服务器详情 */
 async function fetchServerDetailsFromEntry(
 	entry: SmitherySearchEntry,
 	options?: { apiKey?: string },
@@ -335,6 +390,7 @@ async function fetchServerDetailsFromEntry(
 	return null;
 }
 
+/** 将搜索条目和服务器详情组合为搜索结果 */
 function toSearchResult(entry: SmitherySearchEntry, details: SmitheryServerDetails): SmitherySearchResult | null {
 	if (!entry.id) return null;
 	const qualifiedName = normalizeQualifiedName(
@@ -388,6 +444,10 @@ function toSearchResult(entry: SmitherySearchEntry, details: SmitheryServerDetai
 	};
 }
 
+/**
+ * 搜索 Smithery 注册表。
+ * 支持分页获取、身份匹配过滤、去重和并行获取详情。
+ */
 export async function searchSmitheryRegistry(
 	keyword: string,
 	options?: SmitherySearchOptions,
@@ -403,7 +463,7 @@ export async function searchSmitheryRegistry(
 		headers.set("Authorization", `Bearer ${options.apiKey}`);
 	}
 
-	// Fetch pages until we have enough filtered entries or run out of results.
+	// 分页获取，直到有足够的过滤条目或结果耗尽
 	const maxPages = 3;
 	const allEntries: SmitherySearchEntry[] = [];
 	for (let page = 1; page <= maxPages; page++) {
@@ -420,7 +480,7 @@ export async function searchSmitheryRegistry(
 		if (pageEntries.length === 0) break;
 		allEntries.push(...pageEntries);
 
-		// Stop early if we already have enough identity-matching entries.
+		// 如果已有足够的身份匹配条目则提前停止
 		const filtered = isSemantic ? allEntries : allEntries.filter(entry => matchesIdentityQuery(query, entry));
 		if (filtered.length >= limit * 2) break;
 		if (pageEntries.length < pageSize) break;
@@ -428,7 +488,7 @@ export async function searchSmitheryRegistry(
 
 	const entries = isSemantic ? [...allEntries] : [...allEntries].filter(entry => matchesIdentityQuery(query, entry));
 
-	// Only apply local useCount sort when not in semantic mode (preserve API relevance ranking).
+	// 仅在非语义模式下按使用次数排序（保留 API 的相关性排名）
 	if (!isSemantic) {
 		entries.sort((a, b) => (b.useCount ?? 0) - (a.useCount ?? 0));
 	}
@@ -472,6 +532,8 @@ export async function searchSmitheryRegistry(
 	return results.filter((result): result is SmitherySearchResult => result !== null).slice(0, limit);
 }
 
+/** 将候选名称转换为 MCP 配置名称 */
 export function toConfigName(candidate: string): string {
 	return toConfigNameFromQualifiedName(candidate);
 }
+

@@ -1,3 +1,4 @@
+
 /**
  * Protocol handler for agent:// URLs.
  *
@@ -10,6 +11,15 @@
  * - agent://<id> - Full output content
  * - agent://<id>/<path> - JSON extraction via path form
  * - agent://<id>?q=<query> - JSON extraction via query form
+ *
+ * agent:// URL 协议处理器。
+ * 将 Agent 输出 ID 在所有活跃会话的 artifacts 目录中查找解析。
+ * 父子 Agent 通过该注册表共享输出：子 Agent 能读取父 Agent 的输出 ID，
+ * 因为父子会话都注册在共享上下文中。
+ * URL 形式：
+ * - agent://<id>          完整输出内容
+ * - agent://<id>/<path>   通过路径形式提取 JSON
+ * - agent://<id>?q=<query> 通过查询语法提取 JSON
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -23,6 +33,9 @@ import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
  *
  * Resolves output IDs like "reviewer_0" to their artifact files,
  * with optional JSON extraction.
+ *
+ * agent:// URL 处理器：将形如 "reviewer_0" 的输出 ID
+ * 解析为对应的 artifact 文件，并可选地执行 JSON 提取。
  */
 export class AgentProtocolHandler implements ProtocolHandler {
 	readonly scheme = "agent";
@@ -127,3 +140,4 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

@@ -1,3 +1,7 @@
+
+/**
+ * mcp:// 协议处理器：将 mcp:// URL 解析到对应的 MCP server 资源并读取内容。
+ */
 import { MCPManager } from "../mcp/manager";
 import type { MCPResourceReadResult } from "../mcp/types";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
@@ -99,6 +103,10 @@ function formatAvailableResources(mcpManager: MCPManager): string {
  *
  * URL form:
  * - mcp://<resource-uri> (e.g. mcp://test://notes, mcp://ibkr://portfolio/positions)
+ *
+ * mcp:// URL 协议处理器。
+ * URL 形式：mcp://<resource-uri>
+ * （示例：mcp://test://notes、mcp://ibkr://portfolio/positions）
  */
 export class McpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "mcp";
@@ -149,3 +157,4 @@ export class McpProtocolHandler implements ProtocolHandler {
 		};
 	}
 }
+

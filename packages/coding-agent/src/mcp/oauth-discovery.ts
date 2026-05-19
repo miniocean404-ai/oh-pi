@@ -1,10 +1,14 @@
+
 /**
  * MCP OAuth Auto-Discovery
+ * MCP OAuth 自动发现
  *
  * Automatically detects OAuth requirements from MCP server responses
  * and extracts authentication endpoints.
+ * 自动检测 MCP 服务器响应中的 OAuth 需求并提取认证端点。
  */
 
+/** OAuth 端点信息 */
 export interface OAuthEndpoints {
 	authorizationUrl: string;
 	tokenUrl: string;
@@ -12,6 +16,7 @@ export interface OAuthEndpoints {
 	scopes?: string;
 }
 
+/** 认证检测结果 */
 export interface AuthDetectionResult {
 	requiresAuth: boolean;
 	authType?: "oauth" | "apikey" | "unknown";
@@ -20,6 +25,7 @@ export interface AuthDetectionResult {
 	message?: string;
 }
 
+/** 从错误消息中解析 MCP 认证服务器 URL */
 function parseMcpAuthServerUrl(errorMessage: string): string | undefined {
 	const match = errorMessage.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
 	if (!match?.[1]) return undefined;
@@ -31,18 +37,21 @@ function parseMcpAuthServerUrl(errorMessage: string): string | undefined {
 	}
 }
 
+/** 从错误中提取 MCP 认证服务器 URL */
 export function extractMcpAuthServerUrl(error: Error): string | undefined {
 	return parseMcpAuthServerUrl(error.message);
 }
 
 /**
  * Detect if an error indicates authentication is required.
+ * 检测错误是否表示需要认证。
  * Checks for common auth error patterns.
+ * 检查常见的认证错误模式。
  */
 export function detectAuthError(error: Error): boolean {
 	const errorMsg = error.message.toLowerCase();
 
-	// Check for HTTP auth status codes
+	// 检查 HTTP 认证状态码
 	if (
 		errorMsg.includes("401") ||
 		errorMsg.includes("403") ||
@@ -59,7 +68,9 @@ export function detectAuthError(error: Error): boolean {
 
 /**
  * Extract OAuth endpoints from error response.
+ * 从错误响应中提取 OAuth 端点。
  * Looks for WWW-Authenticate header format or JSON error bodies.
+ * 查找 WWW-Authenticate 头格式或 JSON 错误体。
  */
 export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 	const errorMsg = error.message;
@@ -112,13 +123,13 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 	};
 
 	try {
-		// Try to parse as JSON error response
-		// Many MCP servers return JSON with OAuth endpoints in error body
+		// 尝试解析为 JSON 错误响应
+		// 许多 MCP 服务器在错误体中返回包含 OAuth 端点的 JSON
 		const jsonMatch = errorMsg.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
 			const errorBody = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
 
-			// Check for OAuth endpoints in error body
+			// 检查错误体中的 OAuth 端点
 			if (errorBody.oauth || errorBody.authorization || errorBody.auth) {
 				const oauthData = (errorBody.oauth || errorBody.authorization || errorBody.auth) as Record<string, unknown>;
 				const endpoints = readEndpointsFromObject(oauthData);
@@ -141,7 +152,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			}
 		}
 	} catch {
-		// Not JSON, continue with other detection methods
+		// 不是 JSON，继续其他检测方法
 	}
 
 	const challengeEntries = Array.from(errorMsg.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]+)"/g));
@@ -187,7 +198,9 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 
 /**
  * Analyze an error to determine authentication requirements.
+ * 分析错误以确定认证需求。
  * Returns structured info about what auth is needed.
+ * 返回关于所需认证的结构化信息。
  */
 export function analyzeAuthError(error: Error): AuthDetectionResult {
 	if (!detectAuthError(error)) {
@@ -196,7 +209,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 
 	const authServerUrl = extractMcpAuthServerUrl(error);
 
-	// Try to extract OAuth endpoints
+	// 尝试提取 OAuth 端点
 	const oauth = extractOAuthEndpoints(error);
 
 	if (oauth) {
@@ -209,7 +222,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 		};
 	}
 
-	// Check if it might be API key based
+	// 检查是否可能是 API 密钥认证
 	const errorMsg = error.message.toLowerCase();
 	if (
 		errorMsg.includes("api key") ||
@@ -225,7 +238,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 		};
 	}
 
-	// Unknown auth type
+	// 未知认证类型
 	return {
 		requiresAuth: true,
 		authType: "unknown",
@@ -236,7 +249,9 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 
 /**
  * Try to discover OAuth endpoints by querying the server's well-known endpoints.
+ * 尝试通过查询服务器的知名端点来发现 OAuth 端点。
  * This is a fallback when error responses don't include OAuth metadata.
+ * 当错误响应不包含 OAuth 元数据时作为回退方案。
  */
 export async function discoverOAuthEndpoints(
 	serverUrl: string,
@@ -347,3 +362,4 @@ export async function discoverOAuthEndpoints(
 
 	return null;
 }
+

@@ -1,3 +1,4 @@
+
 export { truncate } from "@oh-my-pi/pi-utils";
 
 import * as fs from "node:fs/promises";
@@ -22,12 +23,13 @@ import type {
 export { detectLanguageId } from "../utils/lang-from-path";
 
 // =============================================================================
-// URI Handling (Cross-Platform)
+// URI 处理（跨平台）
 // =============================================================================
 
 /**
  * Convert a file path to a file:// URI.
  * Handles Windows drive letters correctly.
+ * 将文件路径转换为 file:// URI，正确处理 Windows 盘符。
  */
 export function fileToUri(filePath: string): string {
 	const resolved = path.resolve(filePath);
@@ -44,6 +46,7 @@ export function fileToUri(filePath: string): string {
 /**
  * Convert a file:// URI to a file path.
  * Handles Windows drive letters correctly.
+ * 将 file:// URI 转换为文件路径，正确处理 Windows 盘符。
  */
 export function uriToFile(uri: string): string {
 	if (!uri.startsWith("file://")) {
@@ -61,9 +64,10 @@ export function uriToFile(uri: string): string {
 }
 
 // =============================================================================
-// Diagnostic Formatting
+// 诊断信息格式化
 // =============================================================================
 
+/** 严重级别编号到名称的映射 */
 const SEVERITY_NAMES: Record<DiagnosticSeverity, string> = {
 	1: "error",
 	2: "warning",
@@ -73,6 +77,7 @@ const SEVERITY_NAMES: Record<DiagnosticSeverity, string> = {
 
 /**
  * Convert diagnostic severity number to string name.
+ * 将诊断严重级别数字转换为字符串名称
  */
 export function severityToString(severity?: DiagnosticSeverity): string {
 	return SEVERITY_NAMES[severity ?? 1] ?? "unknown";
@@ -80,6 +85,7 @@ export function severityToString(severity?: DiagnosticSeverity): string {
 
 /**
  * Sort diagnostics by severity, then by location and message.
+ * 按严重级别排序诊断信息，然后按位置和消息排序
  */
 export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	return diagnostics.sort((a, b) => {
@@ -98,6 +104,7 @@ export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 
 /**
  * Get icon for diagnostic severity.
+ * 获取诊断严重级别对应的图标
  */
 export function severityToIcon(severity?: DiagnosticSeverity): string {
 	const currentTheme = theme as Theme | undefined;
@@ -119,6 +126,7 @@ export function severityToIcon(severity?: DiagnosticSeverity): string {
 
 /**
  * Strip noise from diagnostic messages (clippy URLs, override hints).
+ * 去除诊断消息中的噪音（如 clippy URL、覆盖提示）
  */
 function stripDiagnosticNoise(message: string): string {
 	return message
@@ -137,6 +145,7 @@ function stripDiagnosticNoise(message: string): string {
 
 /**
  * Format a diagnostic as a human-readable string.
+ * 将诊断信息格式化为可读字符串
  */
 export function formatDiagnostic(diagnostic: Diagnostic, filePath: string): string {
 	const severity = severityToString(diagnostic.severity);
@@ -149,7 +158,7 @@ export function formatDiagnostic(diagnostic: Diagnostic, filePath: string): stri
 	return `${filePath}:${line}:${col} [${severity}] ${source}${message}${code}`;
 }
 
-// Regex: split on the first `:digits:digits` boundary to separate path from the rest
+// 正则：按第一个 `:数字:数字` 分界拆分路径和其余部分
 const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
 
 /**
@@ -158,6 +167,7 @@ const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
  * Output: "# dir/\n## file.ts\n  line:col [sev] msg"
  *
  * Messages that don't match the expected format are appended ungrouped at the end.
+ * 将预格式化的诊断消息重新格式化为按目录/文件分组的样式。
  */
 export function formatGroupedDiagnosticMessages(messages: string[]): string {
 	const diagnosticsByFile = new Map<string, string[]>();
@@ -201,6 +211,7 @@ export function formatGroupedDiagnosticMessages(messages: string[]): string {
 
 /**
  * Format diagnostics grouped by severity.
+ * 按严重级别分组格式化诊断摘要
  */
 export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
 	const counts = { error: 0, warning: 0, info: 0, hint: 0 };
@@ -222,11 +233,12 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
 }
 
 // =============================================================================
-// Location Formatting
+// 位置格式化
 // =============================================================================
 
 /**
  * Format a location as file:line:col relative to cwd.
+ * 将位置格式化为相对于 cwd 的 file:line:col 格式
  */
 export function formatLocation(location: Location, cwd: string): string {
 	const file = formatPathRelativeToCwd(uriToFile(location.uri), cwd);
@@ -237,22 +249,24 @@ export function formatLocation(location: Location, cwd: string): string {
 
 /**
  * Format a position as line:col.
+ * 将位置格式化为 line:col
  */
 export function formatPosition(line: number, col: number): string {
 	return `${line}:${col}`;
 }
 
 // =============================================================================
-// WorkspaceEdit Formatting
+// 工作区编辑格式化
 // =============================================================================
 
 /**
  * Format a workspace edit as a summary of changes.
+ * 将工作区编辑格式化为变更摘要
  */
 export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] {
 	const results: string[] = [];
 
-	// Handle changes map (legacy format)
+	// 处理 changes 映射（旧格式）
 	if (edit.changes) {
 		for (const [uri, textEdits] of Object.entries(edit.changes)) {
 			const file = formatPathRelativeToCwd(uriToFile(uri), cwd);
@@ -260,7 +274,7 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 		}
 	}
 
-	// Handle documentChanges array (modern format)
+	// 处理 documentChanges 数组（新格式）
 	if (edit.documentChanges) {
 		for (const change of edit.documentChanges) {
 			if ("edits" in change && change.textDocument) {
@@ -289,6 +303,7 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 
 /**
  * Format a text edit as a preview.
+ * 将文本编辑格式化为预览
  */
 export function formatTextEdit(edit: TextEdit, maxLength = 50): string {
 	const range = `${edit.range.start.line + 1}:${edit.range.start.character + 1}`;
@@ -300,9 +315,10 @@ export function formatTextEdit(edit: TextEdit, maxLength = 50): string {
 }
 
 // =============================================================================
-// Symbol Formatting
+// 符号格式化
 // =============================================================================
 
+/** 获取符号类型对应的图标映射 */
 function getSymbolKindIcons(): Record<SymbolKind, string> {
 	const currentTheme = theme as Theme | undefined;
 	const fallback = currentTheme?.format?.bullet ?? "*";
@@ -347,6 +363,7 @@ function getSymbolKindIcons(): Record<SymbolKind, string> {
 
 /**
  * Get icon for symbol kind.
+ * 获取符号类型对应的图标
  */
 export function symbolKindToIcon(kind: SymbolKind): string {
 	const currentTheme = theme as Theme | undefined;
@@ -356,6 +373,7 @@ export function symbolKindToIcon(kind: SymbolKind): string {
 
 /**
  * Get name for symbol kind.
+ * 获取符号类型名称
  */
 export function symbolKindToName(kind: SymbolKind): string {
 	const names: Record<number, string> = {
@@ -391,6 +409,7 @@ export function symbolKindToName(kind: SymbolKind): string {
 
 /**
  * Format a document symbol with optional hierarchy.
+ * 格式化文档符号，支持层级缩进
  */
 export function formatDocumentSymbol(symbol: DocumentSymbol, indent = 0): string[] {
 	const prefix = "  ".repeat(indent);
@@ -410,6 +429,7 @@ export function formatDocumentSymbol(symbol: DocumentSymbol, indent = 0): string
 
 /**
  * Format a symbol information (flat format).
+ * 格式化符号信息（扁平格式）
  */
 export function formatSymbolInformation(symbol: SymbolInformation, cwd: string): string {
 	const icon = symbolKindToIcon(symbol.kind);
@@ -418,6 +438,7 @@ export function formatSymbolInformation(symbol: SymbolInformation, cwd: string):
 	return `${icon} ${symbol.name}${container} @ ${location}`;
 }
 
+/** 按查询字符串过滤工作区符号 */
 export function filterWorkspaceSymbols(symbols: SymbolInformation[], query: string): SymbolInformation[] {
 	const needle = query.trim().toLowerCase();
 	if (!needle) return symbols;
@@ -427,6 +448,7 @@ export function filterWorkspaceSymbols(symbols: SymbolInformation[], query: stri
 	});
 }
 
+/** 去重工作区符号 */
 export function dedupeWorkspaceSymbols(symbols: SymbolInformation[]): SymbolInformation[] {
 	const seen = new Set<string>();
 	const unique: SymbolInformation[] = [];
@@ -446,6 +468,7 @@ export function dedupeWorkspaceSymbols(symbols: SymbolInformation[]): SymbolInfo
 	return unique;
 }
 
+/** 格式化代码操作为可读字符串 */
 export function formatCodeAction(action: CodeAction | Command, index: number): string {
 	const kind = "kind" in action && action.kind ? action.kind : "action";
 	const preferred = "isPreferred" in action && action.isPreferred ? " (preferred)" : "";
@@ -453,22 +476,26 @@ export function formatCodeAction(action: CodeAction | Command, index: number): s
 	return `${index}: [${kind}] ${action.title}${preferred}${disabled}`;
 }
 
+/** 代码操作应用所需的依赖 */
 export interface CodeActionApplyDependencies {
 	resolveCodeAction?: (action: CodeAction) => Promise<CodeAction>;
 	applyWorkspaceEdit: (edit: WorkspaceEdit) => Promise<string[]>;
 	executeCommand: (command: Command) => Promise<void>;
 }
 
+/** 代码操作应用结果 */
 export interface AppliedCodeActionResult {
 	title: string;
 	edits: string[];
 	executedCommands: string[];
 }
 
+/** 判断是否为纯命令项（非 CodeAction） */
 function isCommandItem(action: CodeAction | Command): action is Command {
 	return typeof action.command === "string";
 }
 
+/** 应用代码操作（编辑和/或执行命令） */
 export async function applyCodeAction(
 	action: CodeAction | Command,
 	dependencies: CodeActionApplyDependencies,
@@ -501,12 +528,15 @@ export async function applyCodeAction(
 	return { title: resolvedAction.title, edits, executedCommands };
 }
 
+/** glob 模式特殊字符 */
 const GLOB_PATTERN_CHARS = /[*?[{]/;
 
+/** 检查字符串是否包含 glob 模式 */
 export function hasGlobPattern(value: string): boolean {
 	return GLOB_PATTERN_CHARS.test(value);
 }
 
+/** 收集 glob 模式匹配的文件路径 */
 export async function collectGlobMatches(
 	pattern: string,
 	cwd: string,
@@ -523,6 +553,7 @@ export async function collectGlobMatches(
 	return { matches, truncated: false };
 }
 
+/** 解析诊断目标文件（支持 glob 模式） */
 export async function resolveDiagnosticTargets(
 	file: string,
 	cwd: string,
@@ -547,11 +578,12 @@ export async function resolveDiagnosticTargets(
 	return collectGlobMatches(file, cwd, maxMatches);
 }
 // =============================================================================
-// Hover Content Extraction
+// 悬停内容提取
 // =============================================================================
 
 /**
  * Extract plain text from hover contents.
+ * 从悬停内容中提取纯文本
  */
 export function extractHoverText(
 	contents: string | { kind: string; value: string } | { language: string; value: string } | unknown[],
@@ -574,13 +606,16 @@ export function extractHoverText(
 }
 
 // =============================================================================
-// General Utilities
+// 通用工具函数
+// =============================================================================
 
+/** 获取行文本中第一个非空白字符的列号 */
 function firstNonWhitespaceColumn(lineText: string): number {
 	const match = lineText.match(/\S/);
 	return match ? (match.index ?? 0) : 0;
 }
 
+/** 在行文本中查找符号的所有匹配位置 */
 function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitive = false): number[] {
 	if (symbol.length === 0) return [];
 	const haystack = caseInsensitive ? lineText.toLowerCase() : lineText;
@@ -610,6 +645,7 @@ function parseSymbolSpec(spec: string): { symbol: string; occurrence: number } {
 	return { symbol: match[1], occurrence };
 }
 
+/** 解析符号在指定行的列位置 */
 export async function resolveSymbolColumn(filePath: string, line: number, symbolSpec?: string): Promise<number> {
 	const lineNumber = Math.max(1, line);
 	try {
@@ -640,6 +676,7 @@ export async function resolveSymbolColumn(filePath: string, line: number, symbol
 	}
 }
 
+/** 读取文件指定行附近的上下文内容 */
 export async function readLocationContext(filePath: string, line: number, contextLines = 1): Promise<string[]> {
 	const targetLine = Math.max(1, line);
 	const surrounding = Math.max(0, contextLines);
@@ -663,3 +700,4 @@ export async function readLocationContext(filePath: string, line: number, contex
 		throw error;
 	}
 }
+
